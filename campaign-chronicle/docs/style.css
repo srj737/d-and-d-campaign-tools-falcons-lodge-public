@@ -201,6 +201,13 @@ dialog.settings::backdrop { background: rgba(0, 0, 0, .7); }
 .mover { justify-content: space-between; }
 .btn.small { padding: 4px 10px; min-width: 0; }
 .ref-group { margin-top: 18px; }
+.ref-tile img { border: 2px solid transparent; transition: border-color .15s; }
+.ref-tile:hover img, .ref-tile:focus-visible img { border-color: rgba(212, 168, 75, .55); }
+.ref-tile.on img { border-color: var(--gold); }
+.ref-editor, .ref-add { margin-top: 16px; padding-top: 4px; border-top: 1px solid var(--line); }
+.ref-editor[hidden] { display: none; }
+select { display: block; width: 100%; margin-top: 6px; padding: 10px 12px; font: inherit; color: var(--ink); background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; }
+input[type="file"] { display: block; width: 100%; margin-top: 6px; color: var(--mute); }
 .sticky-bar { position: sticky; bottom: 0; margin: 20px -8px -8px; padding: 14px 8px; background: linear-gradient(to top, var(--card) 70%, transparent); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
 
 @media (max-width: 640px) {

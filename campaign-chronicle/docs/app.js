@@ -340,10 +340,37 @@
   /* reference pictures live in references/<folder>/<name>.png; the ids used everywhere are "folder/name.png" */
   const refFolders = (cfg) => cfg.reference_folders || { 'player-characters': 'player character', npcs: 'NPC' };
   async function listRefs(cfg) {
+    for (const k of [...blobUrls.keys()]) if (k.startsWith(`${P.base}references/`)) { URL.revokeObjectURL(blobUrls.get(k)); blobUrls.delete(k); }
     const lists = await Promise.all(Object.keys(refFolders(cfg)).map((f) =>
       repoList(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))));
     return lists.flat();
   }
+  /* Shrink a picture in the browser so it fits in a workflow input (about 40 KB). The token cannot write to the repo,
+     so the picture travels inside the run request; bigger originals can still be added on GitHub. */
+  const blobToB64 = (blob) => new Promise((ok, no) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result).split(',')[1] || '');
+    r.onerror = () => no(new Error('Could not read the picture.'));
+    r.readAsDataURL(blob);
+  });
+  async function shrinkImage(file, limit = 52000) {
+    let bmp;
+    try { bmp = await createImageBitmap(file); } catch { throw new Error('That file is not a picture this browser can read.'); }
+    for (const maxDim of [768, 640, 512, 448, 384, 320, 256]) {
+      const k = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+      const w = Math.max(1, Math.round(bmp.width * k)), hh = Math.max(1, Math.round(bmp.height * k));
+      const c = document.createElement('canvas'); c.width = w; c.height = hh;
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, w, hh); g.drawImage(bmp, 0, 0, w, hh);
+      for (const q of [0.88, 0.8, 0.7, 0.6, 0.5]) {
+        const blob = await new Promise((ok) => c.toBlob(ok, 'image/jpeg', q));
+        const data = blob ? await blobToB64(blob) : '';
+        if (data && data.length <= limit) return { data, w, h: hh, kb: Math.max(1, Math.round(blob.size / 1024)) };
+      }
+    }
+    throw new Error('That picture is too detailed to shrink enough. Try a simpler or smaller one, or add it on GitHub.');
+  }
+  const refSlug = (t) => String(t).toLowerCase().replace(/\.[^.]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+
   const refName = (id) => id.split('/').pop().replace(/\.[^.]+$/, '').replace(/-\d+$/, '').replace(/[-_]+/g, ' ');
   const refKind = (id) => refFolders(W.cfg)[id.split('/')[0]] || id.split('/')[0];
 
@@ -470,6 +497,7 @@
         setBanner('ok', `${label}: done.`);
         setBusy(false);
         if (step === 'delete') location.hash = '#/workshop';
+        else if (step === 'reference') await showWorkshop(null, true);
         else if (step !== 'parse') await showWorkshop(sid, true);   // a new session loads via the hash change
         return true;
       }
@@ -528,7 +556,8 @@
       const tiles = ids.map((id) => {
         const img = h('img', { alt: refName(id), loading: 'lazy', style: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--card2)' });
         repoImage(dir + id).then((u) => { img.src = u; }).catch(() => {});
-        return h('figure', { style: 'margin:0' }, img,
+        return h('figure', { class: 'ref-tile', tabindex: '0', role: 'button', 'data-ref': id, 'aria-label': `Edit ${refName(id)}`,
+          style: 'margin:0;cursor:pointer', onclick: () => selectRef(id), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRef(id); } } }, img,
           h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, refName(id)));
       });
       return h('div', { class: 'ref-group', 'data-folder': folder },
@@ -537,14 +566,71 @@
         tiles.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, tiles)
           : h('p', { class: 'muted small' }, 'None yet.'));
     });
+    const editor = h('div', { class: 'ref-editor', id: 'ref-editor', hidden: true });
+    const folderSelect = (value) => h('select', { 'aria-label': 'Folder' }, Object.entries(folders).map(([f, k]) =>
+      h('option', Object.assign({ value: f }, f === value ? { selected: true } : {}), `${k}s`)));
+    function selectRef(id) {
+      $$('.ref-tile', document).forEach((t) => t.classList.toggle('on', t.dataset.ref === id));
+      const [folder, file] = id.split('/');
+      const stem = file.replace(/\.[^.]+$/, '');
+      const name = h('input', { type: 'text', value: stem, maxlength: '60', 'aria-label': 'Name' });
+      const where = folderSelect(folder);
+      const save = h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
+        const n = refSlug(name.value);
+        if (!n) { setBanner('err', 'Give the picture a name, using letters and numbers.'); return; }
+        if (n === stem && where.value === folder) { setBanner('err', 'Change the name or the folder first.'); return; }
+        await runStep('reference', 'references', { action: 'move', from: id, folder: where.value, name: n }, 'Saving picture');
+      } }, 'Save changes');
+      const del = h('button', { class: 'btn danger act', type: 'button', onclick: async () => {
+        if (!confirm(`Delete ${refName(id)} (${refKind(id)}) from the reference pictures?`)) return;
+        await runStep('reference', 'references', { action: 'delete', file: id }, 'Deleting picture');
+      } }, 'Delete picture');
+      editor.hidden = false;
+      editor.replaceChildren(h('h3', { style: 'margin:0 0 8px' }, 'Edit ', h('span', { style: 'text-transform:capitalize' }, refName(id))),
+        h('div', { class: 'two' }, h('label', null, 'Name', name), h('label', null, 'Folder', where)),
+        h('div', { class: 'row' }, save, del, h('button', { class: 'btn ghost', type: 'button', onclick: () => {
+          editor.hidden = true; $$('.ref-tile', document).forEach((t) => t.classList.remove('on')); } }, 'Close')),
+        h('p', { class: 'muted small' }, 'Renaming changes which characters, places or objects it matches. Pictures already used in finished images are unaffected.'));
+      editor.scrollIntoView?.({ block: 'nearest' });
+    }
+
+    /* add a picture */
+    let ready = null;
+    const addName = h('input', { type: 'text', id: 'ref-name', maxlength: '60', placeholder: 'e.g. lord-voss', 'aria-label': 'New picture name' });
+    const addFolder = folderSelect('player-characters');
+    const info = h('p', { class: 'muted small', id: 'ref-info' }, 'Choose a picture. It is shrunk in your browser to fit (about 40 KB); for sharper originals, add them on GitHub instead.');
+    const addBtn = h('button', { class: 'btn primary act', id: 'ref-add', type: 'button', 'data-off': '1', disabled: true, onclick: async () => {
+      const n = refSlug(addName.value);
+      if (!ready || !n) { setBanner('err', 'Choose a picture and give it a name.'); return; }
+      const exists = W.refs.some((r) => r.startsWith(`${addFolder.value}/${n}.`));
+      if (exists && !confirm(`${n} already exists in that folder. Replace it?`)) return;
+      await runStep('reference', 'references', { action: 'add', folder: addFolder.value, name: n, data: ready.data, replace: exists }, 'Adding picture');
+    } }, 'Add picture');
+    const fileIn = h('input', { type: 'file', id: 'ref-file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Picture file',
+      onchange: async (e) => {
+        ready = null; addBtn.dataset.off = '1'; addBtn.disabled = true;
+        const f = e.target.files && e.target.files[0];
+        if (!f) return;
+        info.textContent = 'Shrinking…';
+        try {
+          ready = await shrinkImage(f);
+          if (!addName.value.trim()) addName.value = refSlug(f.name);
+          info.textContent = `Ready: ${ready.w}×${ready.h} JPEG, ${ready.kb} KB.`;
+          addBtn.dataset.off = W.busy ? '1' : '0'; addBtn.disabled = W.busy;
+        } catch (err) { info.textContent = err.message || String(err); }
+      } });
+    const addForm = h('div', { class: 'ref-add' }, h('h3', { style: 'margin:18px 0 8px' }, 'Add a picture'),
+      h('div', { class: 'two' }, h('label', null, 'Folder', addFolder), h('label', null, 'Name', addName)),
+      h('label', null, 'Picture', fileIn), info, addBtn);
+
     const off = W.cfg.use_references === false;
     return h('div', { class: 'panel' }, h('h2', null, 'Reference pictures'),
       h('p', { class: 'muted' }, 'Pictures in these folders are sent to the image model with any scene that features them, '
         + 'to keep characters, places and objects looking the same. Name each file after what it shows, for example '
-        + 'thorn.png or dudgeon-manor.jpg. The workshop cannot upload files: add them on GitHub (Add file, then Upload files) under ',
-        h('code', null, dir), '.'),
+        + 'thorn or dudgeon-manor. Add, rename, move and delete them here; click a picture to edit it. Pictures added here are shrunk to fit, '
+        + 'so for sharper originals use GitHub (Add file, then Upload files) under ', h('code', null, dir), '.'),
       off ? h('p', { class: 'note err' }, 'Reference images are switched off in config.json (use_references).') : null,
-      sections,
+      sections, editor, addForm,
       W.refs.length ? null : h('p', { class: 'note' }, 'No reference pictures yet. Images are made from the written descriptions alone.'));
   }
 
