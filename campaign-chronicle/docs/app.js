@@ -476,12 +476,19 @@
     return (await res.json()).workflow_runs || [];
   }
 
+  const PAID_STEPS = new Set(['parse', 'refine', 'prompts', 'generate']);
+  let unsure = null;   // a paid run that may still be going after the page lost contact with GitHub
   async function runStep(step, sid, payload, label) {
     if (W.busy) return false;
+    if (unsure && PAID_STEPS.has(step) && PAID_STEPS.has(unsure.step) && unsure.sid === sid && Date.now() - unsure.at < 20 * 60 * 1000
+        && !confirm('A earlier request for this session may still be running on GitHub (this page lost contact with it). '
+          + 'Starting another could charge you twice. Reload the page first to see whether it finished.\n\nStart another anyway?')) return false;
     setBusy(true);
     setBanner('busy', `${label}: sending to GitHub…`);
+    let sent = false;
     try {
       const before = new Set((await listRuns()).map((r) => r.id));
+      sent = true;   // from here on the request may have reached GitHub even if this page never hears back
       const res = await api(`/repos/${S.repo}/actions/workflows/dnd.yml/dispatches`, {
         method: 'POST',
         body: JSON.stringify({ ref: S.branch, inputs: { step, session_id: sid, payload: JSON.stringify(payload), dry_run: String(!!W.dry) } }),
@@ -493,9 +500,16 @@
       }
       const t0 = Date.now();
       let run = null;
+      let misses = 0;
       while (Date.now() - t0 < 15 * 60 * 1000) {
         await sleep(4000);
-        const runs = await listRuns();
+        let runs;
+        try { runs = await listRuns(); misses = 0; } catch (e) {
+          // a brief network drop must not abandon a run that is still going on GitHub's side
+          if (++misses > 10) throw new Error('Lost contact with GitHub. The run may still be going: reload the page in a minute and check before starting it again.');
+          setBanner('busy', `${label}: connection hiccup, retrying… (${misses})`);
+          continue;
+        }
         run = runs.find((r) => !before.has(r.id) && (r.display_title || r.name || '').startsWith(step) && (r.display_title || r.name || '').includes(sid)) || null;
         const secs = Math.round((Date.now() - t0) / 1000);
         if (!run) {
@@ -508,6 +522,7 @@
       }
       if (!run || run.status !== 'completed') throw new Error('Timed out waiting for the run. It may still finish; check the Actions tab.');
       if (run.conclusion === 'success') {
+        unsure = null;
         setBanner('ok', `${label}: done.`);
         setBusy(false);
         if (step === 'delete') location.hash = '#/workshop';
@@ -521,7 +536,11 @@
       setBusy(false);
       return false;
     } catch (e) {
-      setBanner('err', `${label} failed: ${e.message || e}`);
+      const lost = sent && /failed to fetch|networkerror|load failed|lost contact/i.test(String(e.message || e));
+      if (lost) unsure = { step, sid, at: Date.now() };
+      setBanner('err', lost && !/lost contact/i.test(String(e.message || e))
+        ? `${label}: lost contact with GitHub, but the run may still be going. Reload the page in a minute and check before starting it again.`
+        : `${label} failed: ${e.message || e}`);
       setBusy(false);
       return false;
     }
