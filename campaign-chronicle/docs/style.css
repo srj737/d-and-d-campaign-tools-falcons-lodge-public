@@ -186,6 +186,7 @@ dialog.settings::backdrop { background: rgba(0, 0, 0, .7); }
 .img figcaption input { width: 100%; margin-bottom: 8px; }
 .mover { justify-content: space-between; }
 .btn.small { padding: 4px 10px; min-width: 0; }
+.ref-group { margin-top: 18px; }
 .sticky-bar { position: sticky; bottom: 0; margin: 20px -8px -8px; padding: 14px 8px; background: linear-gradient(to top, var(--card) 70%, transparent); display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
 
 @media (max-width: 640px) {

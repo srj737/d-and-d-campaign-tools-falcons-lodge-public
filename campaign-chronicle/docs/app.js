@@ -328,11 +328,21 @@
   }
 
   /* ------------------------------------------------------------ workshop */
-  const W = { cfg: null, usage: null, index: null, chars: [], sid: null, session: null, stage: 'scenes',
+  const W = { cfg: null, usage: null, index: null, refs: [], sid: null, session: null, stage: 'scenes',
               selected: new Set(), busy: false, banner: null, dry: false, loadedFor: null };
 
   const imgCost = () => W.cfg.prices.image_usd[W.cfg.image_quality] || 0.1;
   const refCost = () => W.cfg.prices.reference_image_usd || 0;
+
+  /* reference pictures live in references/<folder>/<name>.png; the ids used everywhere are "folder/name.png" */
+  const refFolders = (cfg) => cfg.reference_folders || { 'player-characters': 'player character', npcs: 'NPC' };
+  async function listRefs(cfg) {
+    const lists = await Promise.all(Object.keys(refFolders(cfg)).map((f) =>
+      repoList(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))));
+    return lists.flat();
+  }
+  const refName = (id) => id.split('/').pop().replace(/\.[^.]+$/, '').replace(/-\d+$/, '').replace(/[-_]+/g, ' ');
+  const refKind = (id) => refFolders(W.cfg)[id.split('/')[0]] || id.split('/')[0];
 
   async function showWorkshop(sid, force) {
     setNav('workshop');
@@ -349,13 +359,12 @@
     if (W.busy && !force) return;
     app.replaceChildren(h('div', { class: 'wrap' }, h('p', { class: 'muted' }, 'Loading workshop…')));
     try {
-      const [cfg, usage, index, chars] = await Promise.all([
-        repoJson(P.base + 'config.json'), repoJson(P.base + 'docs/data/usage.json'), repoJson(P.base + 'docs/data/index.json'),
-        repoList(P.base + 'characters').catch(() => [])]);
+      const [cfg, usage, index] = await Promise.all([
+        repoJson(P.base + 'config.json'), repoJson(P.base + 'docs/data/usage.json'), repoJson(P.base + 'docs/data/index.json')]);
       if (!cfg) throw new Error('config.json was not found in the repository.');
       W.cfg = cfg; W.usage = usage || { spent_usd: 0, budget_usd: cfg.caps.monthly_budget_usd };
       W.index = index || { sessions: [] };
-      W.chars = chars || [];
+      W.refs = await listRefs(cfg);
       if (sid) {
         W.session = await repoJson(`${P.base}docs/data/sessions/${sid}/session.json`);
         if (!W.session) throw new Error('That session was not found.');
@@ -509,22 +518,31 @@
   }
 
   function charsPanel() {
-    const dir = `${P.base}characters/`;
-    const label = (f) => f.replace(/\.[^.]+$/, '').replace(/-\d+$/, '').replace(/[-_]+/g, ' ');
-    const tiles = W.chars.map((f) => {
-      const img = h('img', { alt: label(f), loading: 'lazy', style: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--card2)' });
-      repoImage(dir + f).then((u) => { img.src = u; }).catch(() => {});
-      return h('figure', { style: 'margin:0' }, img,
-        h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, label(f)));
+    const dir = `${P.base}references/`;
+    const folders = refFolders(W.cfg);
+    const sections = Object.entries(folders).map(([folder, kind]) => {
+      const ids = W.refs.filter((r) => r.startsWith(folder + '/'));
+      const tiles = ids.map((id) => {
+        const img = h('img', { alt: refName(id), loading: 'lazy', style: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--card2)' });
+        repoImage(dir + id).then((u) => { img.src = u; }).catch(() => {});
+        return h('figure', { style: 'margin:0' }, img,
+          h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, refName(id)));
+      });
+      return h('div', { class: 'ref-group', 'data-folder': folder },
+        h('h3', { style: 'margin:0 0 8px' }, h('span', { style: 'text-transform:capitalize' }, `${kind}s`), ' ',
+          h('span', { class: 'muted small', style: 'font-family:var(--sans);font-weight:400' }, `references/${folder}/`)),
+        tiles.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, tiles)
+          : h('p', { class: 'muted small' }, 'None yet.'));
     });
     const off = W.cfg.use_references === false;
-    return h('div', { class: 'panel' }, h('h2', null, 'Character references'),
-      h('p', { class: 'muted' }, 'Pictures in the characters folder are sent to the image model with any scene that features that character, '
-        + 'to keep them looking the same. Name each file after the character, for example thorn.png or brother-alden.jpg. '
-        + 'The workshop cannot upload files: add them on GitHub (Add file, then Upload files) in ', h('code', null, dir), '.'),
+    return h('div', { class: 'panel' }, h('h2', null, 'Reference pictures'),
+      h('p', { class: 'muted' }, 'Pictures in these folders are sent to the image model with any scene that features them, '
+        + 'to keep characters, places and objects looking the same. Name each file after what it shows, for example '
+        + 'thorn.png or dudgeon-manor.jpg. The workshop cannot upload files: add them on GitHub (Add file, then Upload files) under ',
+        h('code', null, dir), '.'),
       off ? h('p', { class: 'note err' }, 'Reference images are switched off in config.json (use_references).') : null,
-      W.chars.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, tiles)
-        : h('p', { class: 'note' }, 'No reference images yet. Images are made from the written descriptions alone.'));
+      sections,
+      W.refs.length ? null : h('p', { class: 'note' }, 'No reference pictures yet. Images are made from the written descriptions alone.'));
   }
 
   /* ---- session view ---- */
@@ -582,7 +600,9 @@
         h('div', { class: 'scene-head' }, pick,
           h('div', null, h('h3', null, sc.title), h('p', null, sc.moment))),
         h('p', { class: 'muted small' }, sc.setting),
-        h('div', { class: 'chips' }, sc.characters.map((c) => h('span', { class: 'chip' }, c)), sc.mood ? h('span', { class: 'chip gold' }, sc.mood) : null),
+        h('div', { class: 'chips' }, sc.characters.map((c) => h('span', { class: 'chip' }, c)),
+          (sc.locations || []).map((c) => h('span', { class: 'chip', title: 'Location' }, '⌂ ' + c)),
+          (sc.objects || []).map((c) => h('span', { class: 'chip', title: 'Object' }, '◆ ' + c)), sc.mood ? h('span', { class: 'chip gold' }, sc.mood) : null),
         h('div', { class: 'scene-tools' },
           h('label', { class: 'grow' }, 'Notes for Claude', note),
           h('label', { class: 'check' }, reroll, 'Replace with a different moment')));
@@ -625,7 +645,7 @@
       ta.addEventListener('input', () => { count.textContent = `${ta.value.length} / ${cap}`; });
       const scene = s.scenes.find((x) => x.id === p.scene_id);
       const refBoxes = (p.references || []).map((f) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: true, 'data-file': f }), h('span', null, f)));
+        h('input', { type: 'checkbox', checked: true, 'data-file': f }), h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
       const card = h('div', { class: 'scene' }, h('h3', null, scene ? scene.title : 'Image'),
         h('label', null, 'Slideshow caption', cap_), h('label', null, 'Image prompt', ta), count,
         refBoxes.length ? h('div', null,
@@ -674,10 +694,11 @@
       const ta = h('textarea', { rows: '8', maxlength: String(cap), value: it.prompt, 'aria-label': 'Image prompt' });
       const count = h('div', { class: 'counter' }, `${it.prompt.length} / ${cap}`);
       ta.addEventListener('input', () => { it.prompt = ta.value; count.textContent = `${ta.value.length} / ${cap}`; });
-      const files = [...new Set([...W.chars, ...it.refs])];
+      const files = [...new Set([...W.refs, ...it.refs])];
       const refBoxes = files.map((f) => h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: it.refs.includes(f),
-          onchange: (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); } }), h('span', null, f)));
+          onchange: (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); } }),
+        h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
       const guard = () => {
         if (isDirty()) { setBanner('err', 'Save your caption and order changes first, then edit the prompt.'); return false; }
         if (!it.prompt.trim()) { setBanner('err', 'The prompt can\'t be empty.'); return false; }
