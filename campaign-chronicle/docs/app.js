@@ -693,7 +693,7 @@
         + 'so for sharper originals use GitHub (Add file, then Upload files) under ', h('code', null, dir), '.'),
       off ? h('p', { class: 'note err' }, 'Reference images are switched off in config.json (use_references).') : null,
       sections, editor, addForm,
-      W.refs.length ? null : h('p', { class: 'note' }, 'No reference pictures yet. Images are made from the written descriptions alone.'));
+      W.refs.length ? null : h('p', { class: 'note' }, 'No reference pictures yet. Until you add some, each image is made from the text prompt alone. Pictures you add here are sent to the image model (OpenAI) together with the prompt, for scenes that feature them.'));
   }
 
   /* ---- session view ---- */
