@@ -80,6 +80,12 @@
     const j = await res.json();
     return Array.isArray(j) ? j.filter((f) => f.type === 'file' && /\.(png|jpe?g|webp)$/i.test(f.name)).map((f) => f.name) : [];
   }
+  async function repoMarkdown(path) {
+    const res = await api(`/repos/${S.repo}/contents/${path}?ref=${encodeURIComponent(S.branch)}`);
+    if (!res.ok) return [];
+    const j = await res.json();
+    return Array.isArray(j) ? j.filter((f) => f.type === 'file' && /\.md$/i.test(f.name)).map((f) => f.name) : [];
+  }
   const blobUrls = new Map();
   async function repoImage(path) {
     if (blobUrls.has(path)) return blobUrls.get(path);
@@ -341,10 +347,18 @@
   const refFolders = (cfg) => cfg.reference_folders || { 'player-characters': 'player character', npcs: 'NPC' };
   async function listRefs(cfg) {
     for (const k of [...blobUrls.keys()]) if (k.startsWith(`${P.base}references/`)) { URL.revokeObjectURL(blobUrls.get(k)); blobUrls.delete(k); }
-    const lists = await Promise.all(Object.keys(refFolders(cfg)).map((f) =>
+    const folders = Object.keys(refFolders(cfg));
+    const lists = await Promise.all(folders.map((f) =>
       repoList(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))));
+    /* descriptions: references/<folder>/<subject>.md, one per subject, shared by all its pictures */
+    const mds = (await Promise.all(folders.map((f) =>
+      repoMarkdown(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))))).flat();
+    W.descs = {};
+    await Promise.all(mds.map(async (id) => { W.descs[id] = ((await repoText(`${P.base}references/${id}`).catch(() => '')) || '').trim(); }));
     return lists.flat();
   }
+  const subjectBase = (id) => id.split('/').pop().replace(/\.[^.]+$/, '').replace(/-\d+$/, '');
+  const descFor = (folder, base) => W.descs && W.descs[`${folder}/${base}.md`] || '';
   /* Shrink a picture in the browser so it fits in a workflow input (about 40 KB). The token cannot write to the repo,
      so the picture travels inside the run request; bigger originals can still be added on GitHub. */
   const blobToB64 = (blob) => new Promise((ok, no) => {
@@ -553,6 +567,13 @@
     const folders = refFolders(W.cfg);
     const sections = Object.entries(folders).map(([folder, kind]) => {
       const ids = W.refs.filter((r) => r.startsWith(folder + '/'));
+      const pictured = new Set(ids.map(subjectBase));
+      const textOnly = Object.keys(W.descs || {}).filter((d) => d.startsWith(folder + '/') && !pictured.has(subjectBase(d)));
+      const textTiles = textOnly.map((id) => h('figure', { class: 'ref-tile text-only', tabindex: '0', role: 'button', 'data-ref': id,
+        'aria-label': `Edit ${refName(id)}`, style: 'margin:0;cursor:pointer', onclick: () => selectRef(id),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRef(id); } } },
+        h('div', { class: 'ref-nopic' }, 'no picture'),
+        h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, refName(id))));
       const tiles = ids.map((id) => {
         const img = h('img', { alt: refName(id), loading: 'lazy', style: 'width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:var(--card2)' });
         repoImage(dir + id).then((u) => { img.src = u; }).catch(() => {});
@@ -563,7 +584,7 @@
       return h('div', { class: 'ref-group', 'data-folder': folder },
         h('h3', { style: 'margin:0 0 8px' }, h('span', { style: 'text-transform:capitalize' }, `${kind}s`), ' ',
           h('span', { class: 'muted small', style: 'font-family:var(--sans);font-weight:400' }, `references/${folder}/`)),
-        tiles.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, tiles)
+        tiles.length || textTiles.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, [...tiles, ...textTiles])
           : h('p', { class: 'muted small' }, 'None yet.'));
     });
     const editor = h('div', { class: 'ref-editor', id: 'ref-editor', hidden: true });
@@ -573,22 +594,37 @@
       $$('.ref-tile', document).forEach((t) => t.classList.toggle('on', t.dataset.ref === id));
       const [folder, file] = id.split('/');
       const stem = file.replace(/\.[^.]+$/, '');
+      const isText = /\.md$/i.test(file);
+      const base = subjectBase(id);
+      const maxDesc = (W.cfg.caps && W.cfg.caps.max_description_chars) || 600;
+      const desc = h('textarea', { id: 'ref-desc', rows: '4', maxlength: String(maxDesc), 'aria-label': 'Description',
+        placeholder: 'Fixed looks and details, e.g. tall half-orc, braided red beard, scarred left cheek, patched green cloak' });
+      desc.value = descFor(folder, base);
+      const count = h('span', { class: 'muted small' }, '');
+      const upCount = () => { count.textContent = `${desc.value.length}/${maxDesc}`; };
+      desc.addEventListener('input', upCount); upCount();
+      const saveDesc = h('button', { class: 'btn act', id: 'ref-desc-save', type: 'button', onclick: async () => {
+        await runStep('reference', 'references', { action: 'describe', folder, name: base, text: desc.value }, 'Saving description');
+      } }, desc.value ? 'Save description' : 'Save description');
       const name = h('input', { type: 'text', value: stem, maxlength: '60', 'aria-label': 'Name' });
       const where = folderSelect(folder);
       const save = h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
         const n = refSlug(name.value);
         if (!n) { setBanner('err', 'Give the picture a name, using letters and numbers.'); return; }
         if (n === stem && where.value === folder) { setBanner('err', 'Change the name or the folder first.'); return; }
-        await runStep('reference', 'references', { action: 'move', from: id, folder: where.value, name: n }, 'Saving picture');
+        await runStep('reference', 'references', { action: 'move', from: id, folder: where.value, name: n }, 'Saving changes');
       } }, 'Save changes');
       const del = h('button', { class: 'btn danger act', type: 'button', onclick: async () => {
-        if (!confirm(`Delete ${refName(id)} (${refKind(id)}) from the reference pictures?`)) return;
-        await runStep('reference', 'references', { action: 'delete', file: id }, 'Deleting picture');
-      } }, 'Delete picture');
+        if (!confirm(isText ? `Delete the description of ${refName(id)}?` : `Delete ${refName(id)} (${refKind(id)}) from the reference pictures? Its description, if any, is kept.`)) return;
+        await runStep('reference', 'references', { action: 'delete', file: id }, 'Deleting');
+      } }, isText ? 'Delete description' : 'Delete picture');
       editor.hidden = false;
       editor.replaceChildren(h('h3', { style: 'margin:0 0 8px' }, 'Edit ', h('span', { style: 'text-transform:capitalize' }, refName(id))),
         h('div', { class: 'two' }, h('label', null, 'Name', name), h('label', null, 'Folder', where)),
-        h('div', { class: 'row' }, save, del, h('button', { class: 'btn ghost', type: 'button', onclick: () => {
+        h('label', null, 'Description ', count, desc),
+        h('p', { class: 'muted small' }, 'Used whenever this ', h('b', null, refKind(id)), ' is in a scene: the prompt writer is told to follow it exactly. '
+          + 'Shared by every picture of the same name, so thorn and thorn-2 use one description. Leave it empty and save to remove it.'),
+        h('div', { class: 'row' }, saveDesc, save, del, h('button', { class: 'btn ghost', type: 'button', onclick: () => {
           editor.hidden = true; $$('.ref-tile', document).forEach((t) => t.classList.remove('on')); } }, 'Close')),
         h('p', { class: 'muted small' }, 'Renaming changes which characters, places or objects it matches. Pictures already used in finished images are unaffected.'));
       editor.scrollIntoView?.({ block: 'nearest' });
@@ -599,16 +635,24 @@
     const addName = h('input', { type: 'text', id: 'ref-name', maxlength: '60', placeholder: 'e.g. lord-voss', 'aria-label': 'New picture name' });
     const addFolder = folderSelect('player-characters');
     const info = h('p', { class: 'muted small', id: 'ref-info' }, 'Choose a picture. It is shrunk in your browser to fit (about 40 KB); for sharper originals, add them on GitHub instead.');
-    const addBtn = h('button', { class: 'btn primary act', id: 'ref-add', type: 'button', 'data-off': '1', disabled: true, onclick: async () => {
+    const addDesc = h('textarea', { id: 'ref-add-desc', rows: '3', maxlength: String((W.cfg.caps && W.cfg.caps.max_description_chars) || 600),
+      'aria-label': 'New description', placeholder: 'Optional. Fixed looks and details. You can add a description without a picture.' });
+    const addBtn = h('button', { class: 'btn primary act', id: 'ref-add', type: 'button', onclick: async () => {
       const n = refSlug(addName.value);
-      if (!ready || !n) { setBanner('err', 'Choose a picture and give it a name.'); return; }
+      const text = addDesc.value.trim();
+      if (!n || (!ready && !text)) { setBanner('err', 'Give it a name, then choose a picture, write a description, or both.'); return; }
+      if (!ready) {
+        if (descFor(addFolder.value, n.replace(/-\d+$/, '')) && !confirm(`${n} already has a description. Replace it?`)) return;
+        await runStep('reference', 'references', { action: 'describe', folder: addFolder.value, name: n, text }, 'Saving description');
+        return;
+      }
       const exists = W.refs.some((r) => r.startsWith(`${addFolder.value}/${n}.`));
       if (exists && !confirm(`${n} already exists in that folder. Replace it?`)) return;
-      await runStep('reference', 'references', { action: 'add', folder: addFolder.value, name: n, data: ready.data, replace: exists }, 'Adding picture');
-    } }, 'Add picture');
+      await runStep('reference', 'references', { action: 'add', folder: addFolder.value, name: n, data: ready.data, replace: exists, description: text }, 'Adding');
+    } }, 'Add');
     const fileIn = h('input', { type: 'file', id: 'ref-file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Picture file',
       onchange: async (e) => {
-        ready = null; addBtn.dataset.off = '1'; addBtn.disabled = true;
+        ready = null;
         const f = e.target.files && e.target.files[0];
         if (!f) return;
         info.textContent = 'Shrinking…';
@@ -616,12 +660,11 @@
           ready = await shrinkImage(f);
           if (!addName.value.trim()) addName.value = refSlug(f.name);
           info.textContent = `Ready: ${ready.w}×${ready.h} JPEG, ${ready.kb} KB.`;
-          addBtn.dataset.off = W.busy ? '1' : '0'; addBtn.disabled = W.busy;
         } catch (err) { info.textContent = err.message || String(err); }
       } });
-    const addForm = h('div', { class: 'ref-add' }, h('h3', { style: 'margin:18px 0 8px' }, 'Add a picture'),
+    const addForm = h('div', { class: 'ref-add' }, h('h3', { style: 'margin:18px 0 8px' }, 'Add a picture or description'),
       h('div', { class: 'two' }, h('label', null, 'Folder', addFolder), h('label', null, 'Name', addName)),
-      h('label', null, 'Picture', fileIn), info, addBtn);
+      h('label', null, 'Picture', fileIn), info, h('label', null, 'Description', addDesc), addBtn);
 
     const off = W.cfg.use_references === false;
     return h('div', { class: 'panel' }, h('h2', null, 'Reference pictures'),

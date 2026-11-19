@@ -1,6 +1,15 @@
 {
   "sessions": [
     {
+      "id": "2026-11-19-test2-dudgeon-manor-complete-0jzn",
+      "title": "TEST2 - Dudgeon Manor Complete",
+      "date": "2026-11-19",
+      "status": "done",
+      "count": 5,
+      "cover": "images/2026-11-19-test2-dudgeon-manor-complete-0jzn/01-s1-16398.jpg",
+      "updated": "2026-11-19T19:27:47Z"
+    },
+    {
       "id": "2026-11-18-d-d-write-up-dudgeon-manor-26t-8eay",
       "title": "TEST1 - Dudgeon Manor (26th Sept 2026)",
       "date": "2026-11-18",
