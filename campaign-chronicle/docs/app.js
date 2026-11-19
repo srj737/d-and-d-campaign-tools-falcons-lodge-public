@@ -116,7 +116,7 @@
     setNav('gallery');
     if (galleryShown) return;
     const app = $('#app');
-    app.replaceChildren(h('div', { class: 'wrap' }, h('p', { class: 'muted' }, 'Loading sessions…')));
+    app.replaceChildren(h('div', { class: 'wrap' }, h('p', { class: 'muted' }, 'Unrolling the scrolls…')));
     let list = [];
     try { list = (await getJson('data/index.json')).sessions.filter((s) => s.count > 0); }
     catch { /* shows empty state */ }
@@ -124,14 +124,17 @@
       ? h('div', { class: 'grid' }, list.map((s) =>
         h('a', { class: 'sess', href: `#/s/${s.id}` },
           s.cover ? h('img', { src: s.cover, alt: '', loading: 'lazy' }) : null,
-          h('span', { class: 'badge' }, `${s.count} ${s.count === 1 ? 'image' : 'images'}`),
+          h('span', { class: 'badge' }, `✦ ${s.count} ${s.count === 1 ? 'scene' : 'scenes'}`),
           h('div', { class: 'sess-meta' }, h('h3', null, s.title), h('span', null, s.date)))))
       : h('div', { class: 'empty' },
-        h('p', null, 'No sessions have been illustrated yet.'),
-        h('a', { href: '#/workshop' }, 'Open the workshop to create the first one'));
+        h('p', null, 'The scrolls are still blank. No tales have been illustrated yet.'),
+        h('a', { href: '#/workshop' }, 'Visit the workshop to conjure the first one'));
     app.replaceChildren(h('div', { class: 'wrap' },
-      h('div', { class: 'hero' }, h('h1', null, 'Sessions'),
-        h('p', null, 'Pick a session to watch it as a slideshow.')), grid));
+      h('div', { class: 'hero' }, h('h1', null, 'The Chronicle'),
+        h('p', null, 'Pick a tale to relive it as a slideshow.'),
+        h('div', { class: 'flourish', 'aria-hidden': 'true' }, h('span', null, '✦'))),
+      grid,
+      h('p', { class: 'gallery-foot' }, 'Told from memory, as the best tales are. Details of events may differ from what actually happened at the table.')));
     galleryShown = true;
   }
 
