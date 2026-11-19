@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Campaign Chronicle</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#app">Skip to content</a>
+  <header class="top">
+    <a class="brand" href="#/">
+      <svg class="sigil" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+        <path d="M12 2.2 20.6 7v10L12 21.8 3.4 17V7z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+        <path d="M12 2.2 12 21.8M3.4 7l17.2 10M20.6 7 3.4 17M3.4 7h17.2M3.4 17h17.2" fill="none" stroke="currentColor" stroke-width=".8" opacity=".55"/>
+      </svg>
+      <span class="brand-text"><b id="site-title">Campaign Chronicle</b><small id="site-sub"></small></span>
+    </a>
+    <nav aria-label="Main">
+      <a href="#/" data-nav="gallery">Gallery</a>
+      <a href="#/workshop" data-nav="workshop">Workshop</a>
+    </nav>
+  </header>
+
+  <main id="app" tabindex="-1"></main>
+
+  <div id="viewer" class="viewer" role="dialog" aria-modal="true" aria-label="Slideshow" hidden></div>
+
+  <dialog id="settings" class="settings">
+    <form method="dialog" id="settings-form">
+      <h2>Workshop connection</h2>
+      <p class="muted">The workshop talks to your private studio repository from this browser. The token is stored only in this browser.</p>
+      <label>Repository
+        <input type="text" id="s-repo" placeholder="owner/private-studio-repo" autocomplete="off" spellcheck="false">
+      </label>
+      <label>Access token
+        <input type="password" id="s-token" placeholder="github_pat_…" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="muted small">Use a fine-grained token limited to this one repository with <b>Actions: Read and write</b> and <b>Contents: Read-only</b>. Nothing else.</p>
+      <p id="s-msg" class="note" role="status"></p>
+      <div class="row">
+        <button type="button" class="btn primary" id="s-save">Save &amp; test</button>
+        <button type="button" class="btn ghost" id="s-forget">Forget token</button>
+        <button type="button" class="btn ghost" id="s-close">Close</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
