@@ -140,7 +140,7 @@
         h('p', null, 'Pick a tale to relive it as a slideshow.'),
         h('div', { class: 'flourish', 'aria-hidden': 'true' }, h('span', null, '✦'))),
       grid,
-      h('p', { class: 'gallery-foot' }, 'Told from memory, as the best tales are. Details of events may differ from what actually happened at the table.')));
+      h('p', { class: 'gallery-foot' }, 'Told from memory, as the best tales are. Details of events may differ from how they truly unfolded.')));
     galleryShown = true;
   }
 
