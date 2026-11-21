@@ -3,7 +3,7 @@
   "title": "TEST3 - Dudgeon Manor",
   "date": "2026-11-21",
   "status": "done",
-  "updated": "2026-11-21T14:10:16Z",
+  "updated": "2026-11-21T14:18:36Z",
   "writeup_public": false,
   "images": [
     {
@@ -24,6 +24,22 @@
     },
     {
       "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/05-s5-63530.jpg",
+      "caption": "Dorothy Bowls Over Voss"
+    },
+    {
+      "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/06-s6-70647.jpg",
+      "caption": "Farq opens the wrong door"
+    },
+    {
+      "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/07-s1-70670.jpg",
+      "caption": "A Glass Bird for Mira"
+    },
+    {
+      "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/08-s4-70695.jpg",
+      "caption": "Glass Key in the Blizzard"
+    },
+    {
+      "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/09-s5-70716.jpg",
       "caption": "Dorothy Bowls Over Voss"
     }
   ]
