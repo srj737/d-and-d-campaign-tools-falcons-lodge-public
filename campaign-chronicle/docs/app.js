@@ -485,6 +485,7 @@
   let unsure = null;   // a paid run that may still be going after the page lost contact with GitHub
   async function runStep(step, sid, payload, label) {
     if (W.busy) return false;
+    if (step !== 'reprompt') W.reopen = null;
     if (unsure && PAID_STEPS.has(step) && PAID_STEPS.has(unsure.step) && unsure.sid === sid && Date.now() - unsure.at < 20 * 60 * 1000
         && !confirm('A earlier request for this session may still be running on GitHub (this page lost contact with it). '
           + 'Starting another could charge you twice. Reload the page first to see whether it finished.\n\nStart another anyway?')) return false;
@@ -857,7 +858,7 @@
     const s = W.session;
     const picks = new Set();
     const items = s.images.map((im) => ({ name: im.file.split('/').pop(), file: im.file, caption: im.caption || '',
-      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], open: false }));
+      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], open: W.reopen === im.file.split('/').pop() }));
     const orig = JSON.stringify(items.map((i) => [i.name, i.caption]));
     const grid = h('div', { class: 'imgs' });
     const removeBtn = h('button', { class: 'btn act', 'data-off': '1', disabled: true, onclick: async () => {
@@ -887,7 +888,20 @@
         return true;
       };
       const cost = imgCost() + refCost() * it.refs.length;
+      const wish = h('input', { type: 'text', maxlength: String(W.cfg.caps.max_note_chars), 'aria-label': 'What should change',
+        placeholder: 'Optional: what should change, e.g. “make Farq the focus”' });
       return h('div', { class: 'redo' },
+        h('div', { class: 'rewrite' },
+          h('div', { class: 'muted small', style: 'margin-bottom:4px' }, 'Have Claude write a new prompt for this scene, using your current character descriptions and pictures. It does not make a picture; use Redo for that.'),
+          wish,
+          h('div', { class: 'row', style: 'margin-top:6px' },
+            h('button', { class: 'btn act rewrite-btn', type: 'button', onclick: async () => {
+              if (isDirty()) { setBanner('err', 'Save your caption and order changes first, then rewrite the prompt.'); return; }
+              W.reopen = it.name;
+              const ok = await runStep('reprompt', s.id, { items: [{ file: it.name, note: wish.value.trim() }] }, 'Rewriting prompt');
+              if (!ok) W.reopen = null;
+            } }, 'Rewrite prompt with Claude'),
+            h('span', { class: 'muted small' }, 'A cent or two. Any prompt edits below are replaced.'))),
         h('label', null, 'Prompt used for this image', ta), count,
         refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:6px 0' }, 'Reference pictures to send:'), h('div', { class: 'row' }, refBoxes)) : null,
         h('div', { class: 'row', style: 'margin-top:10px' },

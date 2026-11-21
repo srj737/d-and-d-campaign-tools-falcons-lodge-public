@@ -212,6 +212,7 @@ textarea#ref-desc, textarea#ref-add-desc { display: block; width: 100%; margin-t
 .add-slot .add-open { opacity: .7; }
 .add-slot .add-open:hover, .add-slot .add-open:focus-visible { opacity: 1; }
 .add-slot textarea { display: block; width: 100%; margin: 6px 0 10px; padding: 10px 12px; font: inherit; color: var(--ink); background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; resize: vertical; }
+.redo .rewrite { margin: 8px 0 12px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .ref-editor[hidden] { display: none; }
 select { display: block; width: 100%; margin-top: 6px; padding: 10px 12px; font: inherit; color: var(--ink); background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; }
 input[type="file"] { display: block; width: 100%; margin-top: 6px; color: var(--mute); }
