@@ -227,3 +227,6 @@ input[type="file"] { display: block; width: 100%; margin-top: 6px; color: var(--
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+.v-err { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 24px; text-align: center; color: var(--mute); pointer-events: none; }
+.v-err[hidden] { display: none; }

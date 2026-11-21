@@ -171,6 +171,7 @@
         h('button', { class: 'icon-btn', id: 'v-close', 'aria-label': 'Close slideshow', title: 'Close (esc)', onclick: closeViewer }, '✕')),
       h('div', { class: 'v-stage', id: 'v-stage' },
         h('img', { id: 'v-img', alt: '' }),
+        h('p', { class: 'v-err', id: 'v-err', hidden: true, role: 'status' }, 'This picture could not be loaded. Check your connection, then press the arrow or reload the page.'),
         h('button', { class: 'icon-btn v-nav prev', 'aria-label': 'Previous image', onclick: () => go(-1) }, '‹'),
         h('button', { class: 'icon-btn v-nav next', 'aria-label': 'Next image', onclick: () => go(1) }, '›'),
         h('div', { class: 'v-cap' }, h('p', { id: 'v-text' }), h('div', { class: 'v-dots', id: 'v-dots' }))));
@@ -188,13 +189,24 @@
     const imgs = V.session.images;
     V.i = (i + imgs.length) % imgs.length;
     const im = imgs[V.i];
-    const el = $('#v-img');
-    const apply = () => {
+    const el = $('#v-img'), err = $('#v-err');
+    /* Only swap the picture in once the new one has really loaded. Until then the stage is blank (never the previous
+       picture under the new caption), and a picture that fails to load says so instead of silently showing the old one. */
+    const token = V.token = (V.token || 0) + 1;
+    el.classList.add('fade');
+    err.hidden = true;
+    const loaded = new Promise((ok, no) => { const t = new Image(); t.onload = ok; t.onerror = no; t.src = im.file; });
+    Promise.all([loaded, sleep(instant ? 0 : 220)]).then(() => {
+      if (token !== V.token || !V.open) return;
       el.src = im.file;
       el.alt = im.caption || V.session.title;
       el.classList.remove('fade');
-    };
-    if (instant) apply(); else { el.classList.add('fade'); setTimeout(apply, 220); }
+    }).catch(() => {
+      if (token !== V.token || !V.open) return;
+      el.removeAttribute('src');
+      el.alt = '';
+      err.hidden = false;
+    });
     $('#v-text').textContent = im.caption || '';
     $('#v-count').textContent = `${V.i + 1} / ${imgs.length}`;
     const dots = $('#v-dots');
