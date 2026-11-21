@@ -3,7 +3,7 @@
   "title": "TEST3 - Dudgeon Manor",
   "date": "2026-11-21",
   "status": "done",
-  "updated": "2026-11-21T16:35:21Z",
+  "updated": "2026-11-21T16:36:48Z",
   "writeup_public": true,
   "images": [
     {
@@ -29,6 +29,10 @@
     {
       "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/09-s5-70716.jpg",
       "caption": "Dorothy Bowls Over Voss"
+    },
+    {
+      "file": "images/2026-11-21-test3-dudgeon-manor-fzwy/07-s7-79008.jpg",
+      "caption": "A shadow fills the doorway above"
     }
   ]
 }
