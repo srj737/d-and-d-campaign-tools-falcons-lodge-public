@@ -426,7 +426,11 @@
         W.session = await repoJson(`${P.base}docs/data/sessions/${sid}/session.json`);
         if (!W.session) throw new Error('That session was not found.');
         if (W.loadedFor === sid) {                      // scenes you just added come ticked; keep your other ticks as they are
-          W.session.scenes.forEach((x) => { if (!knownIds.has(x.id)) W.selected.add(x.id); });
+          const fresh = W.session.scenes.filter((x) => !knownIds.has(x.id));
+          if (fresh.length && (W.session.images || []).length) {
+            // you added a moment to a session that already has pictures: tick just the new one, so the existing pictures stay as they are
+            W.selected = new Set(fresh.map((x) => x.id));
+          } else fresh.forEach((x) => W.selected.add(x.id));
           for (const id of [...W.selected]) if (!W.session.scenes.some((x) => x.id === id)) W.selected.delete(id);
         }
         if (W.loadedFor !== sid) {
@@ -760,6 +764,7 @@
 
   function scenesStage() {
     const s = W.session, max = W.cfg.caps.max_images_per_run;
+    const pictured = new Set((s.images || []).map((im) => im.scene_id));
     const cards = s.scenes.map((sc) => {
       const pick = h('input', { type: 'checkbox', 'aria-label': `Use scene ${sc.title}`, checked: W.selected.has(sc.id),
         onchange: (e) => { e.target.checked ? W.selected.add(sc.id) : W.selected.delete(sc.id); card.classList.toggle('picked', e.target.checked); sync(); } });
@@ -771,7 +776,8 @@
         h('p', { class: 'muted small' }, sc.setting),
         h('div', { class: 'chips' }, sc.characters.map((c) => h('span', { class: 'chip' }, c)),
           (sc.locations || []).map((c) => h('span', { class: 'chip', title: 'Location' }, '⌂ ' + c)),
-          (sc.objects || []).map((c) => h('span', { class: 'chip', title: 'Object' }, '◆ ' + c)), sc.mood ? h('span', { class: 'chip gold' }, sc.mood) : null),
+          (sc.objects || []).map((c) => h('span', { class: 'chip', title: 'Object' }, '◆ ' + c)), sc.mood ? h('span', { class: 'chip gold' }, sc.mood) : null,
+          pictured.has(sc.id) ? h('span', { class: 'chip has-pic', title: 'A picture was already made from this scene' }, '✓ has a picture') : null),
         h('div', { class: 'scene-tools' },
           h('label', { class: 'grow' }, 'Notes for Claude', note),
           h('label', { class: 'check' }, reroll, 'Swap for a different moment (Claude picks)')));
@@ -826,6 +832,7 @@
     sync();
     return h('div', { class: 'panel' },
       h('h2', null, 'Choose and refine the scenes'),
+      pictured.size ? h('p', { class: 'note' }, `${pictured.size} of these scenes already have pictures, and they are safe: writing prompts and making images only adds new pictures. Tick just the new moment(s), then write prompts for them. Existing pictures are on the Images tab, where you can also reorder them.`) : null,
       h('p', { class: 'muted' }, `Tick the moments you want illustrated (up to ${max}). Add notes or ask for a replacement, then refine, or use "+ Add a moment here" to describe one of your own. Each costs a cent or two.`),
       stream,
       h('div', { class: 'sticky-bar' }, h('div', { class: 'row' }, refineBtn, hint), nextBtn));
