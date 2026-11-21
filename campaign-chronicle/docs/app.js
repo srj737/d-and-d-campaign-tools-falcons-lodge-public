@@ -410,8 +410,13 @@
       W.index = index || { sessions: [] };
       W.refs = await listRefs(cfg);
       if (sid) {
+        const knownIds = new Set(W.loadedFor === sid && W.session ? W.session.scenes.map((x) => x.id) : []);
         W.session = await repoJson(`${P.base}docs/data/sessions/${sid}/session.json`);
         if (!W.session) throw new Error('That session was not found.');
+        if (W.loadedFor === sid) {                      // scenes you just added come ticked; keep your other ticks as they are
+          W.session.scenes.forEach((x) => { if (!knownIds.has(x.id)) W.selected.add(x.id); });
+          for (const id of [...W.selected]) if (!W.session.scenes.some((x) => x.id === id)) W.selected.delete(id);
+        }
         if (W.loadedFor !== sid) {
           W.stage = { scenes: 'scenes', prompts: 'prompts', done: 'images' }[W.session.status] || 'scenes';
           W.selected = new Set(W.session.selected && W.session.selected.length ? W.session.selected : W.session.scenes.map((s) => s.id));
@@ -745,7 +750,7 @@
     const cards = s.scenes.map((sc) => {
       const pick = h('input', { type: 'checkbox', 'aria-label': `Use scene ${sc.title}`, checked: W.selected.has(sc.id),
         onchange: (e) => { e.target.checked ? W.selected.add(sc.id) : W.selected.delete(sc.id); card.classList.toggle('picked', e.target.checked); sync(); } });
-      const note = h('textarea', { rows: '2', maxlength: String(W.cfg.caps.max_note_chars), placeholder: 'Refine: e.g. “make it raining”, “focus on the rogue”…' });
+      const note = h('textarea', { rows: '2', maxlength: String(W.cfg.caps.max_note_chars), placeholder: 'Tweak this scene: e.g. “make it raining”, “focus on the rogue”…' });
       const reroll = h('input', { type: 'checkbox' });
       const card = h('div', { class: 'scene' + (W.selected.has(sc.id) ? ' picked' : ''), 'data-id': sc.id },
         h('div', { class: 'scene-head' }, pick,
@@ -756,10 +761,36 @@
           (sc.objects || []).map((c) => h('span', { class: 'chip', title: 'Object' }, '◆ ' + c)), sc.mood ? h('span', { class: 'chip gold' }, sc.mood) : null),
         h('div', { class: 'scene-tools' },
           h('label', { class: 'grow' }, 'Notes for Claude', note),
-          h('label', { class: 'check' }, reroll, 'Replace with a different moment')));
+          h('label', { class: 'check' }, reroll, 'Swap for a different moment (Claude picks)')));
       card._note = note; card._reroll = reroll;
       return card;
     });
+    /* "+ Add a moment here": describe your own moment and Claude writes the scene, placed where you clicked */
+    const maxTotal = W.cfg.caps.max_scenes_total || 12, maxText = W.cfg.caps.max_note_chars;
+    const slot = (after) => {
+      const box = h('div', { class: 'add-slot', 'data-after': after || '' });
+      const open = h('button', { class: 'btn ghost act add-open', type: 'button', onclick: () => {
+        const text = h('textarea', { rows: '3', maxlength: String(maxText), 'aria-label': 'Describe the moment',
+          placeholder: 'Describe the moment in your own words, e.g. “Thorn carries the wounded gnome out of the burning chapel”' });
+        const go = h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
+          const t = text.value.trim();
+          if (!t) { setBanner('err', 'Describe the moment first.'); return; }
+          const notes = {}, reroll = [];
+          cards.forEach((c) => { const n = c._note.value.trim(); if (n) notes[c.dataset.id] = n; if (c._reroll.checked) reroll.push(c.dataset.id); });
+          await runStep('refine', s.id, { notes, reroll, add: [{ after: after || '@start', text: t }] }, 'Adding your moment');
+        } }, 'Add this moment');
+        box.replaceChildren(h('label', null, 'Your moment', text),
+          h('div', { class: 'row' }, go, h('button', { class: 'btn ghost', type: 'button', onclick: () => box.replaceChildren(open) }, 'Cancel'),
+            h('span', { class: 'muted small' }, 'Costs a cent or two. Any notes or swaps you have marked above are applied in the same go.')));
+        text.focus();
+      } }, '+ Add a moment here');
+      box.append(open);
+      return box;
+    };
+    const room = s.scenes.length < maxTotal;
+    const stream = [];
+    if (room) stream.push(slot(null));
+    cards.forEach((c, i) => { stream.push(c); if (room) stream.push(slot(s.scenes[i].id)); });
     const refineBtn = h('button', { class: 'btn act', onclick: async () => {
       const notes = {}, reroll = [];
       cards.forEach((c) => { const n = c._note.value.trim(); if (n) notes[c.dataset.id] = n; if (c._reroll.checked) reroll.push(c.dataset.id); });
@@ -782,8 +813,8 @@
     sync();
     return h('div', { class: 'panel' },
       h('h2', null, 'Choose and refine the scenes'),
-      h('p', { class: 'muted' }, `Tick the moments you want illustrated (up to ${max}). Add notes or ask for a replacement, then refine. Refining costs a cent or two.`),
-      cards,
+      h('p', { class: 'muted' }, `Tick the moments you want illustrated (up to ${max}). Add notes or ask for a replacement, then refine, or use "+ Add a moment here" to describe one of your own. Each costs a cent or two.`),
+      stream,
       h('div', { class: 'sticky-bar' }, h('div', { class: 'row' }, refineBtn, hint), nextBtn));
   }
 
