@@ -355,7 +355,7 @@
 
   /* ------------------------------------------------------------ workshop */
   const W = { cfg: null, usage: null, index: null, refs: [], sid: null, session: null, stage: 'scenes',
-              selected: new Set(), busy: false, banner: null, dry: false, loadedFor: null };
+              selected: new Set(), busy: false, banner: null, dry: false, loadedFor: null, view: null };
 
   const imgCost = () => W.cfg.prices.image_usd[W.cfg.image_quality] || 0.1;
   const refCost = () => W.cfg.prices.reference_image_usd || 0;
@@ -439,6 +439,7 @@
           for (const id of [...W.selected]) if (!W.session.scenes.some((x) => x.id === id)) W.selected.delete(id);
         }
         if (W.loadedFor !== sid) {
+          W.view = null;
           W.stage = { scenes: 'scenes', prompts: 'prompts', done: 'images' }[W.session.status] || 'scenes';
           W.selected = new Set(W.session.selected && W.session.selected.length ? W.session.selected : W.session.scenes.map((s) => s.id));
         }
@@ -506,7 +507,6 @@
   let unsure = null;   // a paid run that may still be going after the page lost contact with GitHub
   async function runStep(step, sid, payload, label) {
     if (W.busy) return false;
-    if (step !== 'reprompt') W.reopen = null;
     if (unsure && PAID_STEPS.has(step) && PAID_STEPS.has(unsure.step) && unsure.sid === sid && Date.now() - unsure.at < 20 * 60 * 1000
         && !confirm('A earlier request for this session may still be running on GitHub (this page lost contact with it). '
           + 'Starting another could charge you twice. Reload the page first to see whether it finished.\n\nStart another anyway?')) return false;
@@ -537,7 +537,7 @@
           setBanner('busy', `${label}: connection hiccup, retrying… (${misses})`);
           continue;
         }
-        run = runs.find((r) => !before.has(r.id) && (r.display_title || r.name || '').startsWith(step) && (r.display_title || r.name || '').includes(sid)) || null;
+        run = runs.find((r) => !before.has(r.id) && (r.display_title || r.name || '').startsWith(step + ' ') && (r.display_title || r.name || '').includes(sid)) || null;
         const secs = Math.round((Date.now() - t0) / 1000);
         if (!run) {
           if (secs > 120) throw new Error('The workflow run did not appear. Check the Actions tab of the repository.');
@@ -774,8 +774,14 @@
         stepBtn('scenes', 1, 'Scenes', true),
         stepBtn('prompts', 2, 'Prompts', s.prompts.length > 0),
         stepBtn('images', 3, 'Images', s.images.length > 0),
-        stepBtn('writeup', 4, 'Write-up', true)),
-      W.stage === 'scenes' ? scenesStage() : W.stage === 'prompts' ? promptsStage() : W.stage === 'writeup' ? writeupStage() : imagesStage(),
+        stepBtn('writeup', 4, 'Write-up', true),
+        stepBtn('manage', 5, 'Manage', true)),
+      W.stage === 'scenes' ? scenesStage() : W.stage === 'prompts' ? promptsStage() : W.stage === 'writeup' ? writeupStage() : W.stage === 'manage' ? manageStage() : imagesStage());
+  }
+
+  function manageStage() {
+    const s = W.session;
+    return h('div', null,
       h('div', { class: 'panel danger-zone' },
         h('h2', null, 'Delete this session'),
         h('p', { class: 'muted' }, 'Removes the session, all of its images and the stored write-up from the repository, and from the public slideshow. This cannot be undone.'),
@@ -910,25 +916,146 @@
         h('button', { class: 'btn ghost act', onclick: () => { W.stage = 'scenes'; paint(); } }, '← Back to scenes'), gen));
   }
 
+  /* ---- enlarge a picture: click it, then click again to see it at full size; arrows/Esc work ---- */
+  function openLightbox(list, start) {
+    if (!list.length) return;
+    const from = document.activeElement;
+    let i = start || 0, token = 0;
+    const img = h('img', { alt: '' });
+    const cap = h('div', { class: 'lb-cap' });
+    const stage = h('div', { class: 'lb-stage' }, img);
+    const box = h('div', { class: 'lightbox', id: 'lightbox', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Enlarged picture' });
+    const close = () => { document.removeEventListener('keydown', onKey, true); box.remove(); if (from && from.focus) from.focus(); };
+    const go = async (n) => {
+      i = (n + list.length) % list.length;
+      const mine = ++token;
+      cap.textContent = list[i].caption || '';
+      img.classList.remove('zoom'); stage.scrollTo(0, 0); img.removeAttribute('src');
+      try { const u = await list[i].url(); if (mine === token) img.src = u; } catch { if (mine === token) cap.textContent = 'This picture could not be loaded.'; }
+    };
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      else if (e.key === 'ArrowLeft' && list.length > 1) { e.stopPropagation(); go(i - 1); }
+      else if (e.key === 'ArrowRight' && list.length > 1) { e.stopPropagation(); go(i + 1); }
+    }
+    img.addEventListener('click', () => img.classList.toggle('zoom'));
+    box.addEventListener('click', (e) => { if (e.target === box || e.target === stage) close(); });
+    const closeBtn = h('button', { class: 'btn lb-close', type: 'button', 'aria-label': 'Close', onclick: close }, '✕ Close');
+    box.append(stage, cap, closeBtn);
+    if (list.length > 1) {
+      box.append(h('button', { class: 'btn ghost lb-nav lb-prev', type: 'button', 'aria-label': 'Previous picture', onclick: () => go(i - 1) }, '‹'),
+        h('button', { class: 'btn ghost lb-nav lb-next', type: 'button', 'aria-label': 'Next picture', onclick: () => go(i + 1) }, '›'));
+    }
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(box);
+    closeBtn.focus();
+    go(i);
+  }
+  const imageUrl = (file) => () => repoImage(P.base + 'docs/' + file);
+  const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
+
   function imagesStage() {
     const s = W.session;
     const picks = new Set();
     const items = s.images.map((im) => ({ name: im.file.split('/').pop(), file: im.file, caption: im.caption || '',
-      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], open: W.reopen === im.file.split('/').pop() }));
+      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], note: im.note || '', made: im.made || '',
+      versions: (im.versions || []).map((v) => ({ name: v.file.split('/').pop(), file: v.file, note: v.note || '', made: v.made || '' })) }));
+    if (W.view && !items[W.view.idx]) W.view = null;
     const orig = JSON.stringify(items.map((i) => [i.name, i.caption]));
-    const grid = h('div', { class: 'imgs' });
-    const removeBtn = h('button', { class: 'btn act', 'data-off': '1', disabled: true, onclick: async () => {
-      if (!picks.size) return;
-      if (!confirm(`Remove ${picks.size} image(s) from this session? This deletes the files.`)) return;
-      await runStep('remove', s.id, { files: [...picks] }, 'Removing images');
-    } }, 'Remove selected');
-    const saveBtn = h('button', { class: 'btn primary act', 'data-off': '1', disabled: true, onclick: async () => {
-      const captions = {};
-      items.forEach((i) => { captions[i.name] = i.caption; });
-      await runStep('edit', s.id, { captions, order: items.map((i) => i.name) }, 'Saving captions and order');
-    } }, 'Save captions & order');
     const isDirty = () => JSON.stringify(items.map((i) => [i.name, i.caption])) !== orig;
-    function promptEditor(it) {
+    const panel = h('div', { class: 'panel' });
+    const unsavedGuard = () => {
+      if (isDirty()) { setBanner('err', 'Save your caption and order changes first.'); return false; }
+      return true;
+    };
+
+    /* ---------- one image, with its own tabs ---------- */
+    function detail() {
+      const i = W.view.idx, it = items[i];
+      const tab = W.view.tab || 'refine';
+      const big = h('img', { alt: it.caption || `Image ${i + 1}`, class: 'big', title: 'Click to enlarge' });
+      repoImage(P.base + 'docs/' + it.file).then((u) => { big.src = u; }).catch(() => { big.src = it.file; });
+      big.addEventListener('click', () => openLightbox(items.map((x) => ({ url: imageUrl(x.file), caption: x.caption })), i));
+      const tabBtn = (key, label) => h('button', { type: 'button', role: 'tab', 'aria-selected': tab === key ? 'true' : 'false', 'data-tab': key,
+        onclick: () => { W.view.tab = key; paint(); } }, label);
+      const body = tab === 'alts' ? altsTab(it, i) : tab === 'prompt' ? promptTab(it) : refineTab(it);
+      return h('div', { class: 'img-detail' },
+        h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:10px' },
+          h('button', { class: 'btn ghost small', type: 'button', onclick: () => { W.view = null; paint(); } }, '← All images'),
+          h('span', { class: 'muted small' }, `Image ${i + 1} of ${items.length}`),
+          h('div', { class: 'row' },
+            h('button', { class: 'btn ghost small', type: 'button', disabled: i === 0, 'aria-label': 'Previous image', onclick: () => { W.view = { idx: i - 1, tab }; paint(); } }, '‹ Prev'),
+            h('button', { class: 'btn ghost small', type: 'button', disabled: i === items.length - 1, 'aria-label': 'Next image', onclick: () => { W.view = { idx: i + 1, tab }; paint(); } }, 'Next ›'))),
+        h('div', { class: 'detail-grid' },
+          h('div', null, big, h('p', { class: 'muted small' }, it.caption || 'No caption', ' · click the picture to enlarge')),
+          h('div', null,
+            h('div', { class: 'tabs', role: 'tablist' }, tabBtn('refine', 'Refine'), tabBtn('alts', `Alternatives (${it.versions.length})`), tabBtn('prompt', 'Prompt & redo')),
+            body,
+            h('div', { class: 'row', style: 'margin-top:14px' },
+              h('button', { class: 'btn danger small act', type: 'button', onclick: async () => {
+                if (!confirm(`Delete this image and its ${it.versions.length} alternative(s)? This deletes the files and cannot be undone.`)) return;
+                W.view = null;
+                await runStep('remove', s.id, { files: [it.name] }, 'Deleting image');
+              } }, 'Delete this image'),
+              h('span', { class: 'muted small' }, 'Or just pick an older version under Alternatives.')))));
+    }
+
+    function refineTab(it) {
+      const max = W.cfg.caps.max_refine_chars || 600;
+      const ta = h('textarea', { rows: '4', maxlength: String(max), id: 'refine-text', 'aria-label': 'What should change',
+        placeholder: 'Describe the one change, e.g. “give the barbarian a red cloak” or “make it night time”' });
+      const chosen = new Set();
+      const cost = () => imgCost() + refCost() * chosen.size;
+      const go = h('button', { class: 'btn primary act', type: 'button', id: 'refine-go', onclick: async () => {
+        if (!unsavedGuard()) return;
+        const text = ta.value.trim();
+        if (!text) { setBanner('err', 'Say what should change first.'); return; }
+        if (!confirm(`Send this picture to the image model with your change? It costs about ${money(cost())}. The current picture is kept under Alternatives.`)) return;
+        const ok = await runStep('refine_image', s.id, { file: it.name, instruction: text, references: [...chosen] }, 'Refining image');
+        if (ok && W.view) { W.view.tab = 'alts'; paint(); }
+      } }, '');
+      const upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
+      const refBoxes = W.refs.map((f) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', onchange: (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); } }),
+        h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
+      upd();
+      return h('div', { class: 'redo' },
+        h('p', { class: 'muted small' }, 'Keeps the picture as it is and changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best.'),
+        h('label', null, 'What should change?', ta),
+        refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:8px 0' }, `Optional: also send reference pictures (up to ${W.cfg.caps.max_references_per_image}) to copy a look from:`),
+          h('div', { class: 'row' }, refBoxes)) : null,
+        h('div', { class: 'row', style: 'margin-top:10px' }, go),
+        h('p', { class: 'muted small' }, 'The current picture is kept under Alternatives, so you can go back if the result is worse.'));
+    }
+
+    function altsTab(it, i) {
+      const everyone = [{ name: it.name, file: it.file, note: it.note, made: it.made, current: true }, ...[...it.versions].reverse()];
+      const lightList = everyone.map((v) => ({ url: imageUrl(v.file), caption: v.current ? 'Current picture' : (v.note || 'Earlier picture') }));
+      const tiles = everyone.map((v, k) => {
+        const img = h('img', { alt: v.current ? 'Current picture' : 'Earlier picture', title: 'Click to enlarge', loading: 'lazy' });
+        repoImage(P.base + 'docs/' + v.file).then((u) => { img.src = u; }).catch(() => { img.src = v.file; });
+        img.addEventListener('click', () => openLightbox(lightList, k));
+        return h('figure', { class: 'alt' + (v.current ? ' current' : ''), 'data-file': v.name, style: 'margin:0' }, img,
+          h('figcaption', null,
+            h('div', { class: 'small' }, v.current ? h('b', null, 'Current') : 'Earlier', v.made ? h('span', { class: 'muted' }, ` · ${when(v.made)}`) : null),
+            v.note ? h('div', { class: 'muted small' }, `Change asked: ${v.note}`) : null,
+            v.current ? null : h('div', { class: 'row', style: 'margin-top:6px' },
+              h('button', { class: 'btn small act use-version', type: 'button', onclick: async () => {
+                if (!unsavedGuard()) return;
+                await runStep('version', s.id, { file: it.name, action: 'use', version: v.name }, 'Switching picture');
+              } }, 'Use this one'),
+              h('button', { class: 'btn ghost small act del-version', type: 'button', onclick: async () => {
+                if (!confirm('Delete this alternative? The file is removed and this cannot be undone.')) return;
+                await runStep('version', s.id, { file: it.name, action: 'delete', version: v.name }, 'Deleting alternative');
+              } }, 'Delete'))));
+      });
+      const limit = W.cfg.caps.max_versions_per_image || 5;
+      return h('div', null,
+        h('p', { class: 'muted small' }, `Every time you refine or redo a picture, the one it replaces is kept here (the newest ${limit}). Choosing one swaps it into the slideshow; the one you swap out becomes an alternative. Free, no new picture is made.`),
+        it.versions.length ? h('div', { class: 'alts' }, tiles) : h('p', { class: 'muted' }, 'No alternatives yet. Refine or redo this picture and the earlier one will appear here.'));
+    }
+
+    function promptTab(it) {
       const cap = W.cfg.caps.max_prompt_chars;
       const ta = h('textarea', { rows: '8', maxlength: String(cap), value: it.prompt, 'aria-label': 'Image prompt' });
       const count = h('div', { class: 'counter' }, `${it.prompt.length} / ${cap}`);
@@ -939,12 +1066,12 @@
           onchange: (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); } }),
         h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
       const guard = () => {
-        if (isDirty()) { setBanner('err', 'Save your caption and order changes first, then edit the prompt.'); return false; }
+        if (!unsavedGuard()) return false;
         if (!it.prompt.trim()) { setBanner('err', 'The prompt can\'t be empty.'); return false; }
         return true;
       };
       const cost = imgCost() + refCost() * it.refs.length;
-      const wish = h('input', { type: 'text', maxlength: String(W.cfg.caps.max_note_chars), 'aria-label': 'What should change',
+      const wish = h('input', { type: 'text', maxlength: String(W.cfg.caps.max_note_chars), 'aria-label': 'What should change in the prompt',
         placeholder: 'Optional: what should change, e.g. “make Farq the focus”' });
       return h('div', { class: 'redo' },
         h('div', { class: 'rewrite' },
@@ -952,10 +1079,8 @@
           wish,
           h('div', { class: 'row', style: 'margin-top:6px' },
             h('button', { class: 'btn act rewrite-btn', type: 'button', onclick: async () => {
-              if (isDirty()) { setBanner('err', 'Save your caption and order changes first, then rewrite the prompt.'); return; }
-              W.reopen = it.name;
-              const ok = await runStep('reprompt', s.id, { items: [{ file: it.name, note: wish.value.trim() }] }, 'Rewriting prompt');
-              if (!ok) W.reopen = null;
+              if (!unsavedGuard()) return;
+              await runStep('reprompt', s.id, { items: [{ file: it.name, note: wish.value.trim() }] }, 'Rewriting prompt');
             } }, 'Rewrite prompt with Claude'),
             h('span', { class: 'muted small' }, 'A cent or two. Any prompt edits below are replaced.'))),
         h('label', null, 'Prompt used for this image', ta), count,
@@ -967,14 +1092,28 @@
           } }, 'Save prompt only'),
           h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
             if (!guard()) return;
-            if (!confirm(`Make a new picture from this prompt and replace this one? It costs about ${money(cost)}.`)) return;
-            await runStep('generate', s.id, { prompts: [{ scene_id: it.scene_id, caption: it.caption.trim(), prompt: it.prompt.trim(),
+            if (!confirm(`Make a new picture from this prompt and replace this one? It costs about ${money(cost)}. The current picture is kept under Alternatives.`)) return;
+            const ok = await runStep('generate', s.id, { prompts: [{ scene_id: it.scene_id, caption: it.caption.trim(), prompt: it.prompt.trim(),
               references: it.refs, replaces: it.name }] }, 'Redoing image');
+            if (ok && W.view) { W.view.tab = 'alts'; paint(); }
           } }, `Redo this image (about ${money(cost)})`)),
-        h('p', { class: 'muted small' }, 'Redo swaps the new picture into the same place in the slideshow and deletes the old one.'));
+        h('p', { class: 'muted small' }, 'Redo makes a brand-new picture from the prompt (it does not look at the current one; use Refine for a small change). The old picture is kept under Alternatives.'));
     }
+
+    /* ---------- the grid of all images ---------- */
+    const grid = h('div', { class: 'imgs' });
+    const removeBtn = h('button', { class: 'btn act', 'data-off': '1', disabled: true, onclick: async () => {
+      if (!picks.size) return;
+      if (!confirm(`Remove ${picks.size} image(s) from this session? This deletes the files, including their alternatives.`)) return;
+      await runStep('remove', s.id, { files: [...picks] }, 'Removing images');
+    } }, 'Remove selected');
+    const saveBtn = h('button', { class: 'btn primary act', 'data-off': '1', disabled: true, onclick: async () => {
+      const captions = {};
+      items.forEach((i) => { captions[i.name] = i.caption; });
+      await runStep('edit', s.id, { captions, order: items.map((i) => i.name) }, 'Saving captions and order');
+    } }, 'Save captions & order');
     function dirty() {
-      const d = JSON.stringify(items.map((i) => [i.name, i.caption])) !== orig;
+      const d = isDirty();
       saveBtn.dataset.off = d ? '0' : '1'; saveBtn.disabled = W.busy || !d;
     }
     function move(i, d) {
@@ -985,18 +1124,21 @@
     }
     function draw() {
       grid.replaceChildren(...items.map((it, i) => {
-        const img = h('img', { alt: it.caption || 'Generated image', loading: 'lazy' });
+        const img = h('img', { alt: it.caption || 'Generated image', loading: 'lazy', title: 'Click to enlarge' });
         repoImage(P.base + 'docs/' + it.file).then((u) => { img.src = u; }).catch(() => { img.src = it.file; });
+        img.addEventListener('click', () => openLightbox(items.map((x) => ({ url: imageUrl(x.file), caption: x.caption })), i));
         const cap = h('input', { type: 'text', maxlength: '200', value: it.caption, placeholder: 'Caption', 'aria-label': `Caption for image ${i + 1}`,
           oninput: (e) => { it.caption = e.target.value; dirty(); } });
         return h('figure', { class: 'img', style: 'margin:0' }, img,
           h('label', { class: 'check pick' }, h('input', { type: 'checkbox', 'aria-label': `Select image ${i + 1}`, checked: picks.has(it.name),
             onchange: (e) => { e.target.checked ? picks.add(it.name) : picks.delete(it.name);
               removeBtn.dataset.off = picks.size ? '0' : '1'; removeBtn.disabled = W.busy || !picks.size; } }), 'Select'),
+          it.versions.length ? h('span', { class: 'alt-count', title: 'Earlier versions kept' }, `${it.versions.length} alt`) : null,
           h('figcaption', null, cap,
-            h('button', { class: 'btn ghost small', type: 'button', 'aria-expanded': it.open ? 'true' : 'false',
-              onclick: () => { it.open = !it.open; draw(); } }, it.open ? 'Hide prompt' : 'Prompt & redo'),
-            it.open ? promptEditor(it) : null,
+            h('button', { class: 'btn small open-image', type: 'button', onclick: () => {
+              if (!unsavedGuard()) return;
+              W.view = { idx: i, tab: 'refine' }; paint();
+            } }, 'Open: refine, alternatives, prompt'),
             h('div', { class: 'row mover' },
               h('button', { class: 'btn ghost small', type: 'button', disabled: i === 0, 'aria-label': 'Move earlier', onclick: () => move(i, -1) }, '←'),
               h('span', { class: 'muted small' }, `${i + 1} of ${items.length}`),
@@ -1004,12 +1146,16 @@
       }));
     }
     draw();
-    return h('div', { class: 'panel' },
-      h('h2', null, 'Images'),
-      h('p', { class: 'muted' }, 'Edit captions and reorder, then save. The first image is the session\'s cover. The public slideshow updates about a minute after each change. Open "Prompt & redo" on any image to see the prompt it was made from, tweak it, and replace just that picture.'),
-      grid,
-      h('div', { class: 'sticky-bar' }, h('div', { class: 'row' }, saveBtn, removeBtn),
-        h('button', { class: 'btn act', 'data-off': s.prompts.length ? null : '1', onclick: () => { W.stage = 'prompts'; paint(); }, disabled: !s.prompts.length }, 'Edit prompts / make more')));
+    if (W.view) {
+      panel.replaceChildren(h('h2', null, 'Images'), detail());
+    } else {
+      panel.replaceChildren(h('h2', null, 'Images'),
+        h('p', { class: 'muted' }, 'Edit captions and reorder, then save. The first image is the session\'s cover. The public slideshow updates about a minute after each change. Click a picture to enlarge it. Press "Open" on a picture to refine it, bring back an earlier version, or change its prompt.'),
+        grid,
+        h('div', { class: 'sticky-bar' }, h('div', { class: 'row' }, saveBtn, removeBtn),
+          h('button', { class: 'btn act', 'data-off': s.prompts.length ? null : '1', onclick: () => { W.stage = 'prompts'; paint(); }, disabled: !s.prompts.length }, 'Edit prompts / make more')));
+    }
+    return panel;
   }
 
   function writeupStage() {
