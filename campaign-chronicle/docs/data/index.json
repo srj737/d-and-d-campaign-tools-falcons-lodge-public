@@ -1,15 +1,6 @@
 {
   "sessions": [
     {
-      "id": "2026-11-21-test3-dudgeon-manor-fzwy",
-      "title": "Delivery to Kadrack at the Hospice (played at Dudegon Manor)",
-      "date": "2026-11-21",
-      "status": "done",
-      "count": 7,
-      "cover": "images/2026-11-21-test3-dudgeon-manor-fzwy/08-s6-57967.jpg",
-      "updated": "2026-11-22T14:35:16Z"
-    },
-    {
       "id": "2026-11-19-test2-dudgeon-manor-complete-0jzn",
       "title": "TEST2 - Dudgeon Manor Complete",
       "date": "2026-11-19",
@@ -26,6 +17,15 @@
       "count": 3,
       "cover": "images/2026-11-18-d-d-write-up-dudgeon-manor-26t-8eay/01-s2-29005.jpg",
       "updated": "2026-11-19T18:59:42Z"
+    },
+    {
+      "id": "2026-11-21-test3-dudgeon-manor-fzwy",
+      "title": "Kadrack's Mountain Top Hospice",
+      "date": "2026-09-26",
+      "status": "done",
+      "count": 7,
+      "cover": "images/2026-11-21-test3-dudgeon-manor-fzwy/08-s6-57967.jpg",
+      "updated": "2026-11-22T14:39:20Z"
     }
   ]
 }
