@@ -1055,36 +1055,48 @@
         placeholder: 'e.g. “the barbarian wears a red cloak” or “it is night time”', value: PREFIX });
       ta.addEventListener('focus', () => { if (ta.value === PREFIX) ta.setSelectionRange(PREFIX.length, PREFIX.length); }, { once: true });
       const chosen = new Set();
-      const prices = W.cfg.prices.image_usd;
-      const q = h('select', { id: 'refine-quality', 'aria-label': 'Quality' }, Object.keys(prices).map((k) =>
-        h('option', Object.assign({ value: k }, k === (W.cfg.refine_quality || W.cfg.image_quality) ? { selected: true } : {}), `${k} · ${money(prices[k])}`)));
+      const defModel = W.cfg.refine_model || W.cfg.image_model;
+      const models = [...new Set([defModel, ...(W.cfg.refine_models || []), W.cfg.image_model])];
+      const priceOf = (m) => (m !== W.cfg.image_model && (W.cfg.prices.image_usd_by_model || {})[m]) || W.cfg.prices.image_usd;
+      const model = h('select', { id: 'refine-model', 'aria-label': 'Image model' }, models.map((m) =>
+        h('option', Object.assign({ value: m }, m === defModel ? { selected: true } : {}), m)));
+      const q = h('select', { id: 'refine-quality', 'aria-label': 'Quality' });
+      const fillQuality = (keep) => {
+        const prices = priceOf(model.value), want = keep && prices[keep] != null ? keep : (prices[W.cfg.refine_quality] != null ? W.cfg.refine_quality : Object.keys(prices).filter((k) => k[0] !== '_')[0]);
+        q.replaceChildren(...Object.keys(prices).filter((k) => k[0] !== '_').map((k) =>
+          h('option', Object.assign({ value: k }, k === want ? { selected: true } : {}), `${k} · ${money(prices[k])}`)));
+        q.value = want;
+      };
+      fillQuality(null);
       const comp = h('select', { id: 'refine-compression', 'aria-label': 'Compression' }, [[100, '100 · none (sharpest)'], [95, '95 · barely any'], [90, '90 · light'], [85, '85 · as normal']].map(([v, t]) =>
         h('option', Object.assign({ value: String(v) }, v === (W.cfg.refine_compression ?? 100) ? { selected: true } : {}), t)));
       const from = it.versions.length ? h('select', { id: 'refine-from', 'aria-label': 'Start from' },
         h('option', { value: '' }, 'The current picture'),
         [...it.versions].reverse().map((v) => h('option', { value: v.name }, `Earlier picture${v.made ? ' · ' + when(v.made) : ''}${v.note ? ' · ' + v.note.slice(0, 40) : ''}`))) : null;
-      const cost = () => imgCost(q.value) + refCost() * chosen.size;
+      const cost = () => (priceOf(model.value)[q.value] || 0.1) + refCost() * chosen.size;
       const go = h('button', { class: 'btn primary act', type: 'button', id: 'refine-go', onclick: async () => {
         if (!unsavedGuard()) return;
         const text = ta.value.trim();
         if (!text.replace(/^(\s*change only( this)?\s*[:\-]?\s*)+/i, '')) { setBanner('err', 'Say what should change after "Change only:".'); return; }
-        if (!confirm(`Send this picture to the image model with your change? About ${money(cost())} (${q.value} quality). The current picture is kept under Alternatives.`)) return;
-        const payload = { file: it.name, instruction: text, references: [...chosen], quality: q.value, compression: Number(comp.value) };
+        if (!confirm(`Send this picture to ${model.value} with your change? About ${money(cost())} (${q.value} quality). The current picture is kept under Alternatives.`)) return;
+        const payload = { file: it.name, instruction: text, references: [...chosen], model: model.value, quality: q.value, compression: Number(comp.value) };
         if (from && from.value) payload.from = from.value;
         const ok = await runStep('refine_image', s.id, payload, 'Refining image');
         if (ok && W.view) { W.view.tab = 'alts'; paint(); }
       } }, '');
       const upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
       q.addEventListener('change', upd);
+      model.addEventListener('change', () => { fillQuality(q.value); upd(); });
       const refBoxes = W.refs.map((f) => refChoice(f, false, (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); }));
       upd();
       return h('div', { class: 'redo' },
         h('p', { class: 'muted small' }, 'Changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best, and each pass slightly softens the picture, so if a refine goes wrong, start again from an earlier picture rather than refining the result.'),
         h('label', null, 'What should change?', ta),
         h('div', { class: 'two', style: 'margin-top:8px' },
-          h('label', null, 'Quality (price per picture)', q), h('label', null, 'Compression', comp)),
-        h('p', { class: 'muted small' }, 'Estimated prices: ' + Object.keys(prices).map((k) => `${k} ${money(prices[k])}`).join(' · ')
-          + `, plus ${money(refCost())} for each reference picture sent. High quality and no compression keep the most detail.`),
+          h('label', null, 'Image model', model), h('label', null, 'Quality (price per picture)', q)),
+        h('div', { class: 'two' }, h('label', null, 'Compression', comp), h('span', null)),
+        h('p', { class: 'muted small' }, `The prices are estimates (plus ${money(refCost())} for each reference picture sent); your OpenAI usage page has the real cost. `
+          + 'High quality and no compression keep the most detail. A newer model may give different results from the one the picture was made with, so try one picture first; the old one is kept under Alternatives.'),
         from ? h('label', null, 'Start from', from) : null,
         refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:8px 0' }, `Optional: also send reference pictures (up to ${W.cfg.caps.max_references_per_image}) to copy a look from:`),
           h('div', { class: 'row' }, refBoxes)) : null,
