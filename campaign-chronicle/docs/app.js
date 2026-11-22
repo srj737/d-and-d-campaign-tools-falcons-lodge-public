@@ -81,17 +81,11 @@
     const t = await repoText(path);
     return t == null ? null : JSON.parse(t);
   }
-  async function repoList(path) {
+  async function repoDir(path) {                     // one listing of a folder: the names of its files
     const res = await api(`/repos/${S.repo}/contents/${path}?ref=${encodeURIComponent(S.branch)}`);
     if (!res.ok) return [];
     const j = await res.json();
-    return Array.isArray(j) ? j.filter((f) => f.type === 'file' && /\.(png|jpe?g|webp)$/i.test(f.name)).map((f) => f.name) : [];
-  }
-  async function repoMarkdown(path) {
-    const res = await api(`/repos/${S.repo}/contents/${path}?ref=${encodeURIComponent(S.branch)}`);
-    if (!res.ok) return [];
-    const j = await res.json();
-    return Array.isArray(j) ? j.filter((f) => f.type === 'file' && /\.md$/i.test(f.name)).map((f) => f.name) : [];
+    return Array.isArray(j) ? j.filter((f) => f.type === 'file').map((f) => f.name) : [];
   }
   const blobUrls = new Map();
   async function repoImage(path) {
@@ -124,6 +118,9 @@
 
   /* ------------------------------------------------------------ gallery */
   let galleryShown = false;
+  /* start fetching the list straight away, in parallel with site.json, instead of after it */
+  let indexReady = getJson('data/index.json');
+  indexReady.catch(() => {});
 
   async function showGallery() {
     setNav('gallery');
@@ -131,12 +128,13 @@
     const app = $('#app');
     app.replaceChildren(h('div', { class: 'wrap' }, h('p', { class: 'muted' }, 'Unrolling the scrolls…')));
     let list = [];
-    try { list = (await getJson('data/index.json')).sessions.filter((s) => s.count > 0); }
+    try { const got = indexReady || getJson('data/index.json'); indexReady = null;      // the head start is used once; later visits fetch fresh
+      list = (await got).sessions.filter((s) => s.count > 0); }
     catch { /* shows empty state */ }
     const grid = list.length
       ? h('div', { class: 'grid' }, list.map((s) =>
         h('a', { class: 'sess', href: `#/s/${s.id}` },
-          s.cover ? h('img', { src: s.cover, alt: '', loading: 'lazy' }) : null,
+          s.cover ? h('img', { src: s.thumb || s.cover, alt: '', loading: 'lazy', decoding: 'async', width: '640', height: '427' }) : null,
           h('span', { class: 'badge' }, `✦ ${s.count} ${s.count === 1 ? 'scene' : 'scenes'}`),
           h('div', { class: 'sess-meta' }, h('h3', null, s.title), h('span', { class: 'sess-date' }, fmtDate(s.date))))))
       : h('div', { class: 'empty' },
@@ -364,14 +362,14 @@
 
   /* reference pictures live in references/<folder>/<name>.png; the ids used everywhere are "folder/name.png" */
   const refFolders = (cfg) => cfg.reference_folders || { 'player-characters': 'player character', npcs: 'NPC' };
+  const dropRefPictures = () => { for (const k of [...blobUrls.keys()]) if (k.startsWith(`${P.base}references/`)) { URL.revokeObjectURL(blobUrls.get(k)); blobUrls.delete(k); } };
   async function listRefs(cfg) {
-    for (const k of [...blobUrls.keys()]) if (k.startsWith(`${P.base}references/`)) { URL.revokeObjectURL(blobUrls.get(k)); blobUrls.delete(k); }
+    /* already-downloaded pictures are kept (dropRefPictures runs after a reference change), so reopening the Workshop is quick */
     const folders = Object.keys(refFolders(cfg));
-    const lists = await Promise.all(folders.map((f) =>
-      repoList(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))));
+    const dirs = await Promise.all(folders.map((f) => repoDir(`${P.base}references/${f}`).catch(() => [])));
+    const lists = dirs.map((names, i) => names.filter((n) => /\.(png|jpe?g|webp)$/i.test(n)).map((n) => `${folders[i]}/${n}`));
     /* descriptions: references/<folder>/<subject>.md, one per subject, shared by all its pictures */
-    const mds = (await Promise.all(folders.map((f) =>
-      repoMarkdown(`${P.base}references/${f}`).catch(() => []).then((names) => names.map((n) => `${f}/${n}`))))).flat();
+    const mds = dirs.flatMap((names, i) => names.filter((n) => /\.md$/i.test(n)).map((n) => `${folders[i]}/${n}`));
     W.descs = {};
     await Promise.all(mds.map(async (id) => { W.descs[id] = ((await repoText(`${P.base}references/${id}`).catch(() => '')) || '').trim(); }));
     return lists.flat();
@@ -555,7 +553,7 @@
         setBanner('ok', `${label}: done.`);
         setBusy(false);
         if (step === 'delete') location.hash = '#/workshop';
-        else if (step === 'reference' || step === 'reorder') await showWorkshop(null, true);
+        else if (step === 'reference' || step === 'reorder') { if (step === 'reference') dropRefPictures(); await showWorkshop(null, true); }
         else if (step !== 'parse') await showWorkshop(sid, true);   // a new session loads via the hash change
         return true;
       }
