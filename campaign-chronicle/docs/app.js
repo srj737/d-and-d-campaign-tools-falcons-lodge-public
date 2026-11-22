@@ -357,7 +357,7 @@
   const W = { cfg: null, usage: null, index: null, refs: [], sid: null, session: null, stage: 'scenes',
               selected: new Set(), busy: false, banner: null, dry: false, loadedFor: null, view: null };
 
-  const imgCost = () => W.cfg.prices.image_usd[W.cfg.image_quality] || 0.1;
+  const imgCost = (q) => W.cfg.prices.image_usd[q || W.cfg.image_quality] || 0.1;
   const refCost = () => W.cfg.prices.reference_image_usd || 0;
 
   /* reference pictures live in references/<folder>/<name>.png; the ids used everywhere are "folder/name.png" */
@@ -590,11 +590,15 @@
   /* ---- home view ---- */
   function homeView() {
     const max = W.cfg.caps.max_writeup_chars;
-    const title = h('input', { type: 'text', id: 'f-title', maxlength: '100', placeholder: 'e.g. The Siege of Karrowmere' });
-    const date = h('input', { type: 'date', id: 'f-date', value: new Date().toISOString().slice(0, 10) });
-    const text = h('textarea', { id: 'f-text', rows: '12', placeholder: 'Paste the session write-up here…', style: 'min-height:220px' });
-    const counter = h('div', { class: 'counter' }, `0 / ${max}`);
+    const draft = W.draft || (W.draft = { title: '', date: new Date().toISOString().slice(0, 10), text: '' });   // survives switching tabs
+    const title = h('input', { type: 'text', id: 'f-title', maxlength: '100', placeholder: 'e.g. The Siege of Karrowmere', value: draft.title });
+    const date = h('input', { type: 'date', id: 'f-date', value: draft.date });
+    const text = h('textarea', { id: 'f-text', rows: '12', placeholder: 'Paste the session write-up here…', style: 'min-height:220px', value: draft.text });
+    const counter = h('div', { class: 'counter' }, `${draft.text.length} / ${max}`);
+    title.addEventListener('input', () => { draft.title = title.value; });
+    date.addEventListener('input', () => { draft.date = date.value; });
     text.addEventListener('input', () => {
+      draft.text = text.value;
       counter.textContent = `${text.value.length} / ${max}`;
       counter.classList.toggle('over', text.value.length > max);
     });
@@ -605,18 +609,25 @@
       if (w.length > max) { setBanner('err', `The write-up is over the ${max} character limit.`); return; }
       const sid = `${date.value || new Date().toISOString().slice(0, 10)}-${slug(t)}-${Math.random().toString(36).slice(2, 6)}`;
       const ok = await runStep('parse', sid, { title: t, date: date.value, writeup: w }, 'Finding scenes');
-      if (ok) location.hash = `#/workshop/${sid}`;
+      if (ok) { W.draft = null; W.homeTab = 'sessions'; location.hash = `#/workshop/${sid}`; }
     } }, `Find ${W.cfg.caps.max_scenes} scenes`);
     const sessions = W.index.sessions;
+    const tab = W.homeTab || (sessions.length ? 'sessions' : 'new');
+    const tabBtn = (key, label) => h('button', { type: 'button', role: 'tab', 'data-tab': key, 'aria-selected': tab === key ? 'true' : 'false',
+      onclick: () => { W.homeTab = key; paint(); } }, label);
+    const newPanel = h('div', { class: 'panel' },
+      h('h1', null, 'New session'),
+      h('p', { class: 'muted' }, 'Paste a write-up. Claude picks the most picturesque moments; you choose and refine them before any image is made.'),
+      h('div', { class: 'two' }, h('label', null, 'Title', title), h('label', null, 'Session date', date)),
+      h('label', null, 'Write-up', text), counter,
+      h('div', { class: 'row' }, go, h('span', { class: 'muted small' }, 'Costs a few cents. No images are made yet.')));
     return h('div', null,
-      h('div', { class: 'panel' },
-        h('h1', null, 'New session'),
-        h('p', { class: 'muted' }, 'Paste a write-up. Claude picks the most picturesque moments; you choose and refine them before any image is made.'),
-        h('div', { class: 'two' }, h('label', null, 'Title', title), h('label', null, 'Session date', date)),
-        h('label', null, 'Write-up', text), counter,
-        h('div', { class: 'row' }, go, h('span', { class: 'muted small' }, 'Costs a few cents. No images are made yet.'))),
-      sessions.length ? sessionsPanel(sessions) : null,
-      charsPanel());
+      h('div', { class: 'tabs home-tabs', role: 'tablist' },
+        tabBtn('new', 'New session'), tabBtn('sessions', `Sessions (${sessions.length})`), tabBtn('references', 'Reference pictures')),
+      tab === 'new' ? newPanel
+        : tab === 'references' ? charsPanel()
+          : sessions.length ? sessionsPanel(sessions)
+            : h('div', { class: 'panel' }, h('h2', null, 'Sessions'), h('p', { class: 'muted' }, 'No sessions yet. Start one under "New session".')));
   }
 
   /* the sessions list, with arrows to arrange the order the gallery shows them in */
@@ -988,9 +999,14 @@
     const s = W.session;
     const picks = new Set();
     const items = s.images.map((im) => ({ name: im.file.split('/').pop(), file: im.file, caption: im.caption || '',
-      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], note: im.note || '', made: im.made || '',
+      scene_id: im.scene_id || '', prompt: im.prompt || '', refs: [...(im.references || [])], note: im.note || '', made: im.made || '', cover: im.cover === true,
       versions: (im.versions || []).map((v) => ({ name: v.file.split('/').pop(), file: v.file, note: v.note || '', made: v.made || '' })) }));
     if (W.view && !items[W.view.idx]) W.view = null;
+    const coverName = (items.find((x) => x.cover) || items[0] || {}).name;
+    const setCover = async (name) => {
+      if (!unsavedGuard()) return;
+      await runStep('edit', s.id, { cover: name }, 'Setting gallery picture');
+    };
     const orig = JSON.stringify(items.map((i) => [i.name, i.caption]));
     const isDirty = () => JSON.stringify(items.map((i) => [i.name, i.caption])) !== orig;
     const panel = h('div', { class: 'panel' });
@@ -1022,6 +1038,8 @@
             h('div', { class: 'tabs', role: 'tablist' }, tabBtn('refine', 'Refine'), tabBtn('alts', `Alternatives (${it.versions.length})`), tabBtn('prompt', 'Prompt & redo')),
             body,
             h('div', { class: 'row', style: 'margin-top:14px' },
+              it.name === coverName ? h('span', { class: 'cover-tag' }, '★ Gallery picture')
+                : h('button', { class: 'btn small act set-cover', type: 'button', onclick: () => setCover(it.name) }, '☆ Use as gallery picture'),
               h('button', { class: 'btn danger small act', type: 'button', onclick: async () => {
                 if (!confirm(`Delete this image and its ${it.versions.length} alternative(s)? This deletes the files and cannot be undone.`)) return;
                 W.view = null;
@@ -1032,24 +1050,42 @@
 
     function refineTab(it) {
       const max = W.cfg.caps.max_refine_chars || 600;
+      const PREFIX = 'Change only: ';
       const ta = h('textarea', { rows: '4', maxlength: String(max), id: 'refine-text', 'aria-label': 'What should change',
-        placeholder: 'Describe the one change, e.g. “give the barbarian a red cloak” or “make it night time”' });
+        placeholder: 'e.g. “the barbarian wears a red cloak” or “it is night time”', value: PREFIX });
+      ta.addEventListener('focus', () => { if (ta.value === PREFIX) ta.setSelectionRange(PREFIX.length, PREFIX.length); }, { once: true });
       const chosen = new Set();
-      const cost = () => imgCost() + refCost() * chosen.size;
+      const prices = W.cfg.prices.image_usd;
+      const q = h('select', { id: 'refine-quality', 'aria-label': 'Quality' }, Object.keys(prices).map((k) =>
+        h('option', Object.assign({ value: k }, k === (W.cfg.refine_quality || W.cfg.image_quality) ? { selected: true } : {}), `${k} · ${money(prices[k])}`)));
+      const comp = h('select', { id: 'refine-compression', 'aria-label': 'Compression' }, [[100, '100 · none (sharpest)'], [95, '95 · barely any'], [90, '90 · light'], [85, '85 · as normal']].map(([v, t]) =>
+        h('option', Object.assign({ value: String(v) }, v === (W.cfg.refine_compression ?? 100) ? { selected: true } : {}), t)));
+      const from = it.versions.length ? h('select', { id: 'refine-from', 'aria-label': 'Start from' },
+        h('option', { value: '' }, 'The current picture'),
+        [...it.versions].reverse().map((v) => h('option', { value: v.name }, `Earlier picture${v.made ? ' · ' + when(v.made) : ''}${v.note ? ' · ' + v.note.slice(0, 40) : ''}`))) : null;
+      const cost = () => imgCost(q.value) + refCost() * chosen.size;
       const go = h('button', { class: 'btn primary act', type: 'button', id: 'refine-go', onclick: async () => {
         if (!unsavedGuard()) return;
         const text = ta.value.trim();
-        if (!text) { setBanner('err', 'Say what should change first.'); return; }
-        if (!confirm(`Send this picture to the image model with your change? It costs about ${money(cost())}. The current picture is kept under Alternatives.`)) return;
-        const ok = await runStep('refine_image', s.id, { file: it.name, instruction: text, references: [...chosen] }, 'Refining image');
+        if (!text.replace(/^(\s*change only( this)?\s*[:\-]?\s*)+/i, '')) { setBanner('err', 'Say what should change after "Change only:".'); return; }
+        if (!confirm(`Send this picture to the image model with your change? About ${money(cost())} (${q.value} quality). The current picture is kept under Alternatives.`)) return;
+        const payload = { file: it.name, instruction: text, references: [...chosen], quality: q.value, compression: Number(comp.value) };
+        if (from && from.value) payload.from = from.value;
+        const ok = await runStep('refine_image', s.id, payload, 'Refining image');
         if (ok && W.view) { W.view.tab = 'alts'; paint(); }
       } }, '');
       const upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
+      q.addEventListener('change', upd);
       const refBoxes = W.refs.map((f) => refChoice(f, false, (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); }));
       upd();
       return h('div', { class: 'redo' },
-        h('p', { class: 'muted small' }, 'Keeps the picture as it is and changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best.'),
+        h('p', { class: 'muted small' }, 'Changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best, and each pass slightly softens the picture, so if a refine goes wrong, start again from an earlier picture rather than refining the result.'),
         h('label', null, 'What should change?', ta),
+        h('div', { class: 'two', style: 'margin-top:8px' },
+          h('label', null, 'Quality (price per picture)', q), h('label', null, 'Compression', comp)),
+        h('p', { class: 'muted small' }, 'Estimated prices: ' + Object.keys(prices).map((k) => `${k} ${money(prices[k])}`).join(' · ')
+          + `, plus ${money(refCost())} for each reference picture sent. High quality and no compression keep the most detail.`),
+        from ? h('label', null, 'Start from', from) : null,
         refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:8px 0' }, `Optional: also send reference pictures (up to ${W.cfg.caps.max_references_per_image}) to copy a look from:`),
           h('div', { class: 'row' }, refBoxes)) : null,
         h('div', { class: 'row', style: 'margin-top:10px' }, go),
@@ -1161,6 +1197,8 @@
               removeBtn.dataset.off = picks.size ? '0' : '1'; removeBtn.disabled = W.busy || !picks.size; } }), 'Select'),
           it.versions.length ? h('span', { class: 'alt-count', title: 'Earlier versions kept' }, `${it.versions.length} alt`) : null,
           h('figcaption', null, cap,
+            it.name === coverName ? h('div', { class: 'cover-tag' }, '★ Gallery picture')
+              : h('button', { class: 'btn ghost small set-cover', type: 'button', onclick: () => setCover(it.name) }, '☆ Use as gallery picture'),
             h('button', { class: 'btn small open-image', type: 'button', onclick: () => {
               if (!unsavedGuard()) return;
               W.view = { idx: i, tab: 'refine' }; paint();
