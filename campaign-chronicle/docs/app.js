@@ -370,6 +370,7 @@
     const lists = dirs.map((names, i) => names.filter((n) => /\.(png|jpe?g|webp)$/i.test(n)).map((n) => `${folders[i]}/${n}`));
     /* descriptions: references/<folder>/<subject>.md, one per subject, shared by all its pictures */
     const mds = dirs.flatMap((names, i) => names.filter((n) => /\.md$/i.test(n)).map((n) => `${folders[i]}/${n}`));
+    W.labels = (await repoJson(`${P.base}references/labels.json`).catch(() => null)) || {};
     W.descs = {};
     await Promise.all(mds.map(async (id) => { W.descs[id] = ((await repoText(`${P.base}references/${id}`).catch(() => '')) || '').trim(); }));
     return lists.flat();
@@ -404,6 +405,19 @@
 
   const refName = (id) => id.split('/').pop().replace(/\.[^.]+$/, '').replace(/-\d+$/, '').replace(/[-_]+/g, ' ');
   const refKind = (id) => refFolders(W.cfg)[id.split('/')[0]] || id.split('/')[0];
+  /* what a picture shows ("close-up", "full body"...), set in the reference editor; pictures of one subject share a name */
+  const refView = (id) => (W.labels && W.labels[id]) || '';
+  const refNum = (id) => { const m = id.split('/').pop().replace(/\.[^.]+$/, '').match(/-(\d+)$/); return m ? m[1] : ''; };
+  const refShort = (id) => refName(id) + (refView(id) ? ` · ${refView(id)}` : refNum(id) ? ` (${refNum(id)})` : '');
+  /* a tick box with a small picture, so pictures of the same character can be told apart */
+  function refChoice(id, checked, onchange, extra) {
+    const img = h('img', { alt: refShort(id), class: 'ref-thumb', loading: 'lazy' });
+    repoImage(`${P.base}references/${id}`).then((u) => { img.src = u; }).catch(() => {});
+    return h('label', { class: 'check ref-choice', title: refShort(id) },
+      h('input', Object.assign({ type: 'checkbox', checked: !!checked, onchange }, extra || {})), img,
+      h('span', null, h('span', { style: 'text-transform:capitalize' }, refName(id)), ' ', h('span', { class: 'muted small' }, `(${refKind(id)})`),
+        refView(id) ? h('span', { class: 'view-tag' }, refView(id)) : refNum(id) ? h('span', { class: 'muted small' }, ` #${refNum(id)}`) : null));
+  }
 
   async function showWorkshop(sid, force) {
     setNav('workshop');
@@ -657,7 +671,7 @@
         repoImage(dir + id).then((u) => { img.src = u; }).catch(() => {});
         return h('figure', { class: 'ref-tile', tabindex: '0', role: 'button', 'data-ref': id, 'aria-label': `Edit ${refName(id)}`,
           style: 'margin:0;cursor:pointer', onclick: () => selectRef(id), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectRef(id); } } }, img,
-          h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, refName(id)));
+          h('figcaption', { class: 'muted small', style: 'text-align:center;text-transform:capitalize' }, refShort(id)));
       });
       return h('div', { class: 'ref-group', 'data-folder': folder },
         h('h3', { style: 'margin:0 0 8px' }, h('span', { style: 'text-transform:capitalize' }, `${kind}s`), ' ',
@@ -665,6 +679,7 @@
         tiles.length || textTiles.length ? h('div', { style: 'display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:12px' }, [...tiles, ...textTiles])
           : h('p', { class: 'muted small' }, 'None yet.'));
     });
+    const viewSuggestions = () => h('datalist', { id: 'view-suggestions' }, ['close-up', 'full body', 'portrait', 'action pose', 'back view', 'side view'].map((v) => h('option', { value: v })));
     const editor = h('div', { class: 'ref-editor', id: 'ref-editor', hidden: true });
     const folderSelect = (value) => h('select', { 'aria-label': 'Folder' }, Object.entries(folders).map(([f, k]) =>
       h('option', Object.assign({ value: f }, f === value ? { selected: true } : {}), `${k}s`)));
@@ -684,6 +699,11 @@
       const saveDesc = h('button', { class: 'btn act', id: 'ref-desc-save', type: 'button', onclick: async () => {
         await runStep('reference', 'references', { action: 'describe', folder, name: base, text: desc.value }, 'Saving description');
       } }, desc.value ? 'Save description' : 'Save description');
+      const view = h('input', { type: 'text', id: 'ref-label', value: refView(id), maxlength: '30', list: 'view-suggestions', 'aria-label': 'What this picture shows',
+        placeholder: 'e.g. close-up, full body' });
+      const saveView = h('button', { class: 'btn act', id: 'ref-label-save', type: 'button', onclick: async () => {
+        await runStep('reference', 'references', { action: 'label', file: id, label: view.value.trim() }, 'Saving label');
+      } }, 'Save label');
       const name = h('input', { type: 'text', value: stem, maxlength: '60', 'aria-label': 'Name' });
       const where = folderSelect(folder);
       const save = h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
@@ -699,6 +719,10 @@
       editor.hidden = false;
       editor.replaceChildren(h('h3', { style: 'margin:0 0 8px' }, 'Edit ', h('span', { style: 'text-transform:capitalize' }, refName(id))),
         h('div', { class: 'two' }, h('label', null, 'Name', name), h('label', null, 'Folder', where)),
+        isText ? null : h('div', null,
+          h('label', null, 'What this picture shows', view),
+          h('div', { class: 'row', style: 'margin:6px 0 10px' }, saveView,
+            h('span', { class: 'muted small' }, 'If a character has several pictures, a label lets the app send the right one: a close-up for scenes about the face, a full-body picture otherwise. Words like "close-up", "face" or "portrait" count as close-ups; "full body" or "action" as body shots.'))),
         h('label', null, 'Description ', count, desc),
         h('p', { class: 'muted small' }, 'Used whenever this ', h('b', null, refKind(id)), ' is in a scene: the prompt writer is told to follow it exactly. '
           + 'Shared by every picture of the same name, so thorn and thorn-2 use one description. Leave it empty and save to remove it.'),
@@ -713,6 +737,8 @@
     const addName = h('input', { type: 'text', id: 'ref-name', maxlength: '60', placeholder: 'e.g. lord-voss', 'aria-label': 'New picture name' });
     const addFolder = folderSelect('player-characters');
     const info = h('p', { class: 'muted small', id: 'ref-info' }, 'Choose a picture. It is shrunk in your browser to fit (about 40 KB); for sharper originals, add them on GitHub instead.');
+    const addView = h('input', { type: 'text', id: 'ref-add-label', maxlength: '30', list: 'view-suggestions', 'aria-label': 'What the new picture shows',
+      placeholder: 'Optional: close-up, full body...' });
     const addDesc = h('textarea', { id: 'ref-add-desc', rows: '3', maxlength: String((W.cfg.caps && W.cfg.caps.max_description_chars) || 600),
       'aria-label': 'New description', placeholder: 'Optional. Fixed looks and details. You can add a description without a picture.' });
     const addBtn = h('button', { class: 'btn primary act', id: 'ref-add', type: 'button', onclick: async () => {
@@ -726,7 +752,7 @@
       }
       const exists = W.refs.some((r) => r.startsWith(`${addFolder.value}/${n}.`));
       if (exists && !confirm(`${n} already exists in that folder. Replace it?`)) return;
-      await runStep('reference', 'references', { action: 'add', folder: addFolder.value, name: n, data: ready.data, replace: exists, description: text }, 'Adding');
+      await runStep('reference', 'references', { action: 'add', folder: addFolder.value, name: n, data: ready.data, replace: exists, description: text, label: addView.value.trim() }, 'Adding');
     } }, 'Add');
     const fileIn = h('input', { type: 'file', id: 'ref-file', accept: 'image/png,image/jpeg,image/webp', 'aria-label': 'Picture file',
       onchange: async (e) => {
@@ -742,7 +768,9 @@
       } });
     const addForm = h('div', { class: 'ref-add' }, h('h3', { style: 'margin:18px 0 8px' }, 'Add a picture or description'),
       h('div', { class: 'two' }, h('label', null, 'Folder', addFolder), h('label', null, 'Name', addName)),
-      h('label', null, 'Picture', fileIn), info, h('label', null, 'Description', addDesc), addBtn);
+      h('label', null, 'Picture', fileIn), info, h('label', null, 'What it shows', addView),
+      h('p', { class: 'muted small' }, 'Adding a second picture of the same character? Name it with a number, for example imrick-2, and label what it shows.'),
+      h('label', null, 'Description', addDesc), addBtn);
 
     const off = W.cfg.use_references === false;
     return h('div', { class: 'panel' }, h('h2', null, 'Reference pictures'),
@@ -751,7 +779,7 @@
         + 'thorn or dudgeon-manor. Add, rename, move and delete them here; click a picture to edit it. Pictures added here are shrunk to fit, '
         + 'so for sharper originals use GitHub (Add file, then Upload files) under ', h('code', null, dir), '.'),
       off ? h('p', { class: 'note err' }, 'Reference images are switched off in config.json (use_references).') : null,
-      sections, editor, addForm,
+      sections, editor, addForm, viewSuggestions(),
       W.refs.length ? null : h('p', { class: 'note' }, 'No reference pictures yet. Until you add some, each image is made from the text prompt alone. Pictures you add here are sent to the image model (OpenAI) together with the prompt, for scenes that feature them.'));
   }
 
@@ -889,12 +917,14 @@
       const count = h('div', { class: 'counter' }, `${p.prompt.length} / ${cap}`);
       ta.addEventListener('input', () => { count.textContent = `${ta.value.length} / ${cap}`; });
       const scene = s.scenes.find((x) => x.id === p.scene_id);
-      const refBoxes = (p.references || []).map((f) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: true, 'data-file': f }), h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
+      const chosen = p.references || [];
+      const subjects = new Set(chosen.map((f) => `${f.split('/')[0]}/${subjectBase(f)}`));
+      const options = [...chosen, ...W.refs.filter((f) => !chosen.includes(f) && subjects.has(`${f.split('/')[0]}/${subjectBase(f)}`))];
+      const refBoxes = options.map((f) => refChoice(f, chosen.includes(f), null, { 'data-file': f }));
       const card = h('div', { class: 'scene' }, h('h3', null, scene ? scene.title : 'Image'),
         h('label', null, 'Slideshow caption', cap_), h('label', null, 'Image prompt', ta), count,
         refBoxes.length ? h('div', null,
-          h('div', { class: 'muted small', style: 'margin-bottom:6px' }, 'Reference pictures sent with this prompt (each adds a little to the cost):'),
+          h('div', { class: 'muted small', style: 'margin-bottom:6px' }, 'Reference pictures sent with this prompt (each adds a little to the cost). Other pictures of the same character are listed too, in case a different view suits this scene better:'),
           h('div', { class: 'row' }, refBoxes)) : null);
       card._get = () => ({ scene_id: p.scene_id, caption: cap_.value.trim(), prompt: ta.value.trim(),
         references: $$('input[data-file]', card).filter((b) => b.checked).map((b) => b.dataset.file) });
@@ -1015,9 +1045,7 @@
         if (ok && W.view) { W.view.tab = 'alts'; paint(); }
       } }, '');
       const upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
-      const refBoxes = W.refs.map((f) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', onchange: (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); } }),
-        h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
+      const refBoxes = W.refs.map((f) => refChoice(f, false, (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); }));
       upd();
       return h('div', { class: 'redo' },
         h('p', { class: 'muted small' }, 'Keeps the picture as it is and changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best.'),
@@ -1061,10 +1089,8 @@
       const count = h('div', { class: 'counter' }, `${it.prompt.length} / ${cap}`);
       ta.addEventListener('input', () => { it.prompt = ta.value; count.textContent = `${ta.value.length} / ${cap}`; });
       const files = [...new Set([...W.refs, ...it.refs])];
-      const refBoxes = files.map((f) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: it.refs.includes(f),
-          onchange: (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); } }),
-        h('span', null, refName(f), ' ', h('span', { class: 'muted small' }, `(${refKind(f)})`))));
+      const refBoxes = files.map((f) => refChoice(f, it.refs.includes(f),
+        (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); }));
       const guard = () => {
         if (!unsavedGuard()) return false;
         if (!it.prompt.trim()) { setBanner('err', 'The prompt can\'t be empty.'); return false; }

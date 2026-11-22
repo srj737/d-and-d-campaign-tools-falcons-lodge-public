@@ -262,3 +262,8 @@ input[type="file"] { display: block; width: 100%; margin-top: 6px; color: var(--
 .lb-close { position: absolute; top: 14px; right: 14px; }
 .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); font-size: 1.8rem; line-height: 1; padding: 8px 14px; }
 .lb-prev { left: 10px; } .lb-next { right: 10px; }
+
+/* ---- reference choices with a small picture and what it shows ---- */
+.ref-choice { align-items: center; gap: 8px; padding: 4px 8px 4px 4px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); }
+.ref-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 6px; background: var(--card2); flex: none; }
+.view-tag { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--gold2); font-size: .75rem; }
