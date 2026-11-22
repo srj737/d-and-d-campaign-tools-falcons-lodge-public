@@ -5,6 +5,13 @@
   /* ------------------------------------------------------------ utilities */
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+  /* "2026-11-21" -> "21 November 2026" (falls back to the raw text) */
+  const fmtDate = (iso) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+    if (!m) return String(iso || '');
+    try { return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); }
+    catch { return String(iso); }
+  };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const P = { base: '' };   // folder prefix inside the repository, from site.json (repo_path)
   const money = (n) => '$' + (Number(n) || 0).toFixed(2);
@@ -131,7 +138,7 @@
         h('a', { class: 'sess', href: `#/s/${s.id}` },
           s.cover ? h('img', { src: s.cover, alt: '', loading: 'lazy' }) : null,
           h('span', { class: 'badge' }, `✦ ${s.count} ${s.count === 1 ? 'scene' : 'scenes'}`),
-          h('div', { class: 'sess-meta' }, h('h3', null, s.title), h('span', null, s.date)))))
+          h('div', { class: 'sess-meta' }, h('h3', null, s.title), h('span', { class: 'sess-date' }, fmtDate(s.date))))))
       : h('div', { class: 'empty' },
         h('p', null, 'The scrolls are still blank. No tales have been illustrated yet.'),
         h('a', { href: '#/workshop' }, 'Visit the workshop to conjure the first one'));
@@ -163,7 +170,7 @@
     document.body.style.overflow = 'hidden';
     box.replaceChildren(
       h('div', { class: 'v-top' },
-        h('h2', null, session.title),
+        h('h2', null, session.title, session.date ? h('span', { class: 'v-date' }, fmtDate(session.date)) : null),
         h('span', { class: 'v-count', id: 'v-count', 'aria-live': 'polite' }),
         h('button', { class: 'btn ghost small', id: 'v-story-btn', hidden: true, 'aria-expanded': 'false', title: 'Read the write-up (r)', onclick: toggleStory }, 'Story'),
         h('button', { class: 'icon-btn', id: 'v-play', 'aria-label': 'Autoplay', 'aria-pressed': 'false', title: 'Autoplay (space)', onclick: toggleAuto }, '▶'),
@@ -548,7 +555,7 @@
         setBanner('ok', `${label}: done.`);
         setBusy(false);
         if (step === 'delete') location.hash = '#/workshop';
-        else if (step === 'reference') await showWorkshop(null, true);
+        else if (step === 'reference' || step === 'reorder') await showWorkshop(null, true);
         else if (step !== 'parse') await showWorkshop(sid, true);   // a new session loads via the hash change
         return true;
       }
@@ -596,11 +603,43 @@
         h('div', { class: 'two' }, h('label', null, 'Title', title), h('label', null, 'Session date', date)),
         h('label', null, 'Write-up', text), counter,
         h('div', { class: 'row' }, go, h('span', { class: 'muted small' }, 'Costs a few cents. No images are made yet.'))),
-      sessions.length ? h('div', { class: 'panel' }, h('h2', null, 'Sessions'),
-        h('div', { class: 'list' }, sessions.map((s) => h('a', { href: `#/workshop/${s.id}` },
-          h('span', null, h('b', null, s.title), ' ', h('span', { class: 'muted small' }, s.date)),
-          h('span', { class: 'chip ' + (s.count ? 'gold' : '') }, s.count ? `${s.count} images` : s.status))))) : null,
+      sessions.length ? sessionsPanel(sessions) : null,
       charsPanel());
+  }
+
+  /* the sessions list, with arrows to arrange the order the gallery shows them in */
+  function sessionsPanel(sessions) {
+    const order = sessions.map((x) => x.id);
+    const byId = new Map(sessions.map((x) => [x.id, x]));
+    const orig = JSON.stringify(order);
+    const list = h('div', { class: 'list sortable' });
+    const save = h('button', { class: 'btn primary act', id: 'sess-save', type: 'button', 'data-off': '1', disabled: true, onclick: async () => {
+      await runStep('reorder', 'sessions', { ids: order }, 'Saving order');
+    } }, 'Save order');
+    function draw() {
+      list.replaceChildren(...order.map((id, i) => {
+        const x = byId.get(id);
+        return h('div', { class: 'sess-row', 'data-id': id },
+          h('a', { href: `#/workshop/${id}` },
+            h('span', null, h('b', null, x.title), ' ', h('span', { class: 'muted small' }, fmtDate(x.date))),
+            h('span', { class: 'chip ' + (x.count ? 'gold' : '') }, x.count ? `${x.count} images` : x.status)),
+          h('span', { class: 'movers' },
+            h('button', { class: 'btn ghost small', type: 'button', disabled: i === 0, 'aria-label': `Move ${x.title} earlier`, onclick: () => move(i, -1) }, '↑'),
+            h('button', { class: 'btn ghost small', type: 'button', disabled: i === order.length - 1, 'aria-label': `Move ${x.title} later`, onclick: () => move(i, 1) }, '↓')));
+      }));
+    }
+    function move(i, d) {
+      const j = i + d;
+      if (j < 0 || j >= order.length) return;
+      [order[i], order[j]] = [order[j], order[i]];
+      draw();
+      const dirty = JSON.stringify(order) !== orig;
+      save.dataset.off = dirty ? '0' : '1'; save.disabled = W.busy || !dirty;
+    }
+    draw();
+    return h('div', { class: 'panel' }, h('h2', null, 'Sessions'),
+      h('p', { class: 'muted small' }, 'The gallery shows sessions in this order. New sessions start at the top. Use the arrows to rearrange, then save. To change a session\'s date, open it and press "Rename / change date".'),
+      list, h('div', { class: 'row', style: 'margin-top:12px' }, save));
   }
 
   function charsPanel() {
@@ -729,7 +768,7 @@
       h('div', { class: 'row', style: 'justify-content:space-between;margin-bottom:12px' },
         h('div', null, h('h1', { style: 'margin:0' }, s.title), h('span', { class: 'muted small' }, s.date)),
         h('div', { class: 'row' },
-          h('button', { class: 'btn ghost act', id: 'rename-btn', onclick: () => { const f = $('#rename-form'); f.hidden = !f.hidden; } }, 'Rename'),
+          h('button', { class: 'btn ghost act', id: 'rename-btn', onclick: () => { const f = $('#rename-form'); f.hidden = !f.hidden; } }, 'Rename / change date'),
           s.images.length ? h('a', { class: 'btn', href: `#/s/${s.id}`, style: 'text-decoration:none' }, 'View slideshow') : null,
           h('a', { class: 'btn ghost', href: '#/workshop', style: 'text-decoration:none' }, 'All sessions'))),
       renameForm(),
