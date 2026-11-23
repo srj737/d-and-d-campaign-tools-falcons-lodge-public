@@ -941,20 +941,27 @@
         references: $$('input[data-file]', card).filter((b) => b.checked).map((b) => b.dataset.file) });
       return card;
     });
-    const total = s.prompts.reduce((n, p) => n + imgCost() + refCost() * (p.references || []).length, 0);
-    const gen = h('button', { class: 'btn primary act', onclick: async () => {
+    let upd = () => {};
+    const gopts = imageControls('gen', () => upd());
+    const totalNow = () => items.reduce((n, c) => n + gopts.unit() + refCost() * c._get().references.length, 0);
+    const gen = h('button', { class: 'btn primary act', id: 'gen-go', onclick: async () => {
       const prompts = items.map((c) => c._get()).filter((p) => p.prompt);
       if (!prompts.length) { setBanner('err', 'There is nothing to generate.'); return; }
       if (prompts.length > room) { setBanner('err', `Only ${room} more image(s) fit in this session. Remove some first.`); return; }
-      const ok = await runStep('generate', s.id, { prompts }, `Generating ${prompts.length} image${prompts.length === 1 ? '' : 's'}`);
+      const ok = await runStep('generate', s.id, Object.assign({ prompts }, gopts.values()), `Generating ${prompts.length} image${prompts.length === 1 ? '' : 's'}`);
       if (ok) { W.stage = 'images'; paint(); }
-    } }, `Generate ${items.length} image${items.length === 1 ? '' : 's'} (about ${money(total)})`);
-    return h('div', { class: 'panel' },
+    } }, '');
+    upd = () => { gen.textContent = `Generate ${items.length} image${items.length === 1 ? '' : 's'} (about ${money(totalNow())})`; };
+    const panel = h('div', { class: 'panel' },
       h('h2', null, 'Edit the prompts'),
       h('p', { class: 'muted' }, 'These are sent to the image model exactly as written, so change anything you like. Characters and style come from style-guide.md in the repository.'),
       items,
+      h('div', { class: 'scene' }, h('h3', null, 'Image settings for this run'), gopts.node),
       h('div', { class: 'sticky-bar' },
         h('button', { class: 'btn ghost act', onclick: () => { W.stage = 'scenes'; paint(); } }, '← Back to scenes'), gen));
+    panel.addEventListener('change', upd);                  // ticking a reference picture changes the price
+    upd();
+    return panel;
   }
 
   /* ---- enlarge a picture: click it, then click again to see it at full size; arrows/Esc work ---- */
@@ -994,6 +1001,42 @@
   }
   const imageUrl = (file) => () => repoImage(P.base + 'docs/' + file);
   const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); };
+
+  /* model, quality and compression dropdowns with prices. kind 'refine' or 'gen' picks the defaults from config.json;
+     ids are refine-model/refine-quality/refine-compression or gen-model/... */
+  function imageControls(kind, onchange) {
+    const gen = kind === 'gen', C = W.cfg;
+    const defModel = gen ? C.image_model : (C.refine_model || C.image_model);
+    const defQuality = gen ? C.image_quality : C.refine_quality;
+    const defComp = gen ? (C.image_compression ?? 85) : (C.refine_compression ?? 100);
+    const models = [...new Set([defModel, ...((gen ? C.generate_models : C.refine_models) || []), C.image_model])];
+    const priceOf = (m) => (m !== C.image_model && (C.prices.image_usd_by_model || {})[m]) || C.prices.image_usd;
+    const levels = (m) => Object.keys(priceOf(m)).filter((k) => k[0] !== '_');
+    const model = h('select', { id: `${kind}-model`, 'aria-label': 'Image model' }, models.map((m) =>
+      h('option', Object.assign({ value: m }, m === defModel ? { selected: true } : {}), m)));
+    const q = h('select', { id: `${kind}-quality`, 'aria-label': 'Quality' });
+    const fill = (keep) => {
+      const prices = priceOf(model.value);
+      const want = keep && prices[keep] != null ? keep : (prices[defQuality] != null ? defQuality : levels(model.value)[0]);
+      q.replaceChildren(...levels(model.value).map((k) => h('option', Object.assign({ value: k }, k === want ? { selected: true } : {}), `${k} · ${money(prices[k])}`)));
+      q.value = want;
+    };
+    fill(null);
+    const comp = h('select', { id: `${kind}-compression`, 'aria-label': 'Compression' }, [[100, '100 · none (sharpest)'], [95, '95 · barely any'], [90, '90 · light'], [85, '85 · as normal']].map(([v, t]) =>
+      h('option', Object.assign({ value: String(v) }, v === defComp ? { selected: true } : {}), t)));
+    q.addEventListener('change', () => onchange && onchange());
+    comp.addEventListener('change', () => onchange && onchange());
+    model.addEventListener('change', () => { fill(q.value); if (onchange) onchange(); });
+    return {
+      unit: () => priceOf(model.value)[q.value] || 0.1,
+      values: () => ({ model: model.value, quality: q.value, compression: Number(comp.value) }),
+      node: h('div', { class: 'img-options' },
+        h('div', { class: 'two' }, h('label', null, 'Image model', model), h('label', null, 'Quality (price per picture)', q)),
+        h('div', { class: 'two' }, h('label', null, 'Compression', comp), h('span', null)),
+        h('p', { class: 'muted small' }, `Prices are estimates (plus ${money(refCost())} for each reference picture sent); your OpenAI usage page has the real cost. `
+          + 'Higher quality and less compression keep more detail. Different models can give different results.')),
+    };
+  }
 
   function imagesStage() {
     const s = W.session;
@@ -1055,48 +1098,29 @@
         placeholder: 'e.g. “the barbarian wears a red cloak” or “it is night time”', value: PREFIX });
       ta.addEventListener('focus', () => { if (ta.value === PREFIX) ta.setSelectionRange(PREFIX.length, PREFIX.length); }, { once: true });
       const chosen = new Set();
-      const defModel = W.cfg.refine_model || W.cfg.image_model;
-      const models = [...new Set([defModel, ...(W.cfg.refine_models || []), W.cfg.image_model])];
-      const priceOf = (m) => (m !== W.cfg.image_model && (W.cfg.prices.image_usd_by_model || {})[m]) || W.cfg.prices.image_usd;
-      const model = h('select', { id: 'refine-model', 'aria-label': 'Image model' }, models.map((m) =>
-        h('option', Object.assign({ value: m }, m === defModel ? { selected: true } : {}), m)));
-      const q = h('select', { id: 'refine-quality', 'aria-label': 'Quality' });
-      const fillQuality = (keep) => {
-        const prices = priceOf(model.value), want = keep && prices[keep] != null ? keep : (prices[W.cfg.refine_quality] != null ? W.cfg.refine_quality : Object.keys(prices).filter((k) => k[0] !== '_')[0]);
-        q.replaceChildren(...Object.keys(prices).filter((k) => k[0] !== '_').map((k) =>
-          h('option', Object.assign({ value: k }, k === want ? { selected: true } : {}), `${k} · ${money(prices[k])}`)));
-        q.value = want;
-      };
-      fillQuality(null);
-      const comp = h('select', { id: 'refine-compression', 'aria-label': 'Compression' }, [[100, '100 · none (sharpest)'], [95, '95 · barely any'], [90, '90 · light'], [85, '85 · as normal']].map(([v, t]) =>
-        h('option', Object.assign({ value: String(v) }, v === (W.cfg.refine_compression ?? 100) ? { selected: true } : {}), t)));
+      let upd = () => {};
+      const opts = imageControls('refine', () => upd());
       const from = it.versions.length ? h('select', { id: 'refine-from', 'aria-label': 'Start from' },
         h('option', { value: '' }, 'The current picture'),
         [...it.versions].reverse().map((v) => h('option', { value: v.name }, `Earlier picture${v.made ? ' · ' + when(v.made) : ''}${v.note ? ' · ' + v.note.slice(0, 40) : ''}`))) : null;
-      const cost = () => (priceOf(model.value)[q.value] || 0.1) + refCost() * chosen.size;
+      const cost = () => opts.unit() + refCost() * chosen.size;
       const go = h('button', { class: 'btn primary act', type: 'button', id: 'refine-go', onclick: async () => {
         if (!unsavedGuard()) return;
         const text = ta.value.trim();
         if (!text.replace(/^(\s*change only( this)?\s*[:\-]?\s*)+/i, '')) { setBanner('err', 'Say what should change after "Change only:".'); return; }
-        if (!confirm(`Send this picture to ${model.value} with your change? About ${money(cost())} (${q.value} quality). The current picture is kept under Alternatives.`)) return;
-        const payload = { file: it.name, instruction: text, references: [...chosen], model: model.value, quality: q.value, compression: Number(comp.value) };
+        if (!confirm(`Send this picture to ${opts.values().model} with your change? About ${money(cost())} (${opts.values().quality} quality). The current picture is kept under Alternatives.`)) return;
+        const payload = Object.assign({ file: it.name, instruction: text, references: [...chosen] }, opts.values());
         if (from && from.value) payload.from = from.value;
         const ok = await runStep('refine_image', s.id, payload, 'Refining image');
         if (ok && W.view) { W.view.tab = 'alts'; paint(); }
       } }, '');
-      const upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
-      q.addEventListener('change', upd);
-      model.addEventListener('change', () => { fillQuality(q.value); upd(); });
+      upd = () => { go.textContent = `Refine this picture (about ${money(cost())})`; };
       const refBoxes = W.refs.map((f) => refChoice(f, false, (e) => { e.target.checked ? chosen.add(f) : chosen.delete(f); upd(); }));
       upd();
       return h('div', { class: 'redo' },
         h('p', { class: 'muted small' }, 'Changes only what you ask. The picture itself is sent to the image model (OpenAI) with your instruction. One change at a time works best, and each pass slightly softens the picture, so if a refine goes wrong, start again from an earlier picture rather than refining the result.'),
         h('label', null, 'What should change?', ta),
-        h('div', { class: 'two', style: 'margin-top:8px' },
-          h('label', null, 'Image model', model), h('label', null, 'Quality (price per picture)', q)),
-        h('div', { class: 'two' }, h('label', null, 'Compression', comp), h('span', null)),
-        h('p', { class: 'muted small' }, `The prices are estimates (plus ${money(refCost())} for each reference picture sent); your OpenAI usage page has the real cost. `
-          + 'High quality and no compression keep the most detail. A newer model may give different results from the one the picture was made with, so try one picture first; the old one is kept under Alternatives.'),
+        opts.node,
         from ? h('label', null, 'Start from', from) : null,
         refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:8px 0' }, `Optional: also send reference pictures (up to ${W.cfg.caps.max_references_per_image}) to copy a look from:`),
           h('div', { class: 'row' }, refBoxes)) : null,
@@ -1138,15 +1162,26 @@
       ta.addEventListener('input', () => { it.prompt = ta.value; count.textContent = `${ta.value.length} / ${cap}`; });
       const files = [...new Set([...W.refs, ...it.refs])];
       const refBoxes = files.map((f) => refChoice(f, it.refs.includes(f),
-        (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); }));
+        (e) => { it.refs = e.target.checked ? [...it.refs, f] : it.refs.filter((x) => x !== f); updRedo(); }));
       const guard = () => {
         if (!unsavedGuard()) return false;
         if (!it.prompt.trim()) { setBanner('err', 'The prompt can\'t be empty.'); return false; }
         return true;
       };
-      const cost = imgCost() + refCost() * it.refs.length;
+      let updRedo = () => {};
+      const gopts = imageControls('gen', () => updRedo());
+      const cost = () => gopts.unit() + refCost() * it.refs.length;
       const wish = h('input', { type: 'text', maxlength: String(W.cfg.caps.max_note_chars), 'aria-label': 'What should change in the prompt',
         placeholder: 'Optional: what should change, e.g. “make Farq the focus”' });
+      const redoBtn = h('button', { class: 'btn primary act', type: 'button', id: 'redo-go', onclick: async () => {
+        if (!guard()) return;
+        if (!confirm(`Make a new picture from this prompt and replace this one? It costs about ${money(cost())}. The current picture is kept under Alternatives.`)) return;
+        const ok = await runStep('generate', s.id, Object.assign({ prompts: [{ scene_id: it.scene_id, caption: it.caption.trim(), prompt: it.prompt.trim(),
+          references: it.refs, replaces: it.name }] }, gopts.values()), 'Redoing image');
+        if (ok && W.view) { W.view.tab = 'alts'; paint(); }
+      } }, '');
+      updRedo = () => { redoBtn.textContent = `Redo this image (about ${money(cost())})`; };
+      updRedo();
       return h('div', { class: 'redo' },
         h('div', { class: 'rewrite' },
           h('div', { class: 'muted small', style: 'margin-bottom:4px' }, 'Have Claude write a new prompt for this scene, using your current character descriptions and pictures. It does not make a picture; use Redo for that.'),
@@ -1159,18 +1194,13 @@
             h('span', { class: 'muted small' }, 'A cent or two. Any prompt edits below are replaced.'))),
         h('label', null, 'Prompt used for this image', ta), count,
         refBoxes.length ? h('div', null, h('div', { class: 'muted small', style: 'margin:6px 0' }, 'Reference pictures to send:'), h('div', { class: 'row' }, refBoxes)) : null,
+        gopts.node,
         h('div', { class: 'row', style: 'margin-top:10px' },
           h('button', { class: 'btn act', type: 'button', onclick: async () => {
             if (!guard()) return;
             await runStep('edit', s.id, { image_prompts: { [it.name]: it.prompt.trim() } }, 'Saving prompt');
           } }, 'Save prompt only'),
-          h('button', { class: 'btn primary act', type: 'button', onclick: async () => {
-            if (!guard()) return;
-            if (!confirm(`Make a new picture from this prompt and replace this one? It costs about ${money(cost)}. The current picture is kept under Alternatives.`)) return;
-            const ok = await runStep('generate', s.id, { prompts: [{ scene_id: it.scene_id, caption: it.caption.trim(), prompt: it.prompt.trim(),
-              references: it.refs, replaces: it.name }] }, 'Redoing image');
-            if (ok && W.view) { W.view.tab = 'alts'; paint(); }
-          } }, `Redo this image (about ${money(cost)})`)),
+          redoBtn),
         h('p', { class: 'muted small' }, 'Redo makes a brand-new picture from the prompt (it does not look at the current one; use Refine for a small change). The old picture is kept under Alternatives.'));
     }
 
